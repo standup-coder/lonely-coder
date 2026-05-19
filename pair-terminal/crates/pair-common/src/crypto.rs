@@ -3,6 +3,7 @@ use aes_gcm::{
     Aes128Gcm, Nonce,
 };
 use anyhow::{bail, Result};
+use generic_array::typenum::U12;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -12,7 +13,6 @@ const MAX_MESSAGES_PER_KEY: u64 = 2 * (1 << 20);
 const NONCE_SIZE: usize = 12;
 const KEY_SIZE: usize = 16;
 
-#[derive(Clone)]
 pub struct SessionKeys {
     pub bootstrap_key: [u8; KEY_SIZE],
     pub output_key: [u8; KEY_SIZE],
@@ -27,6 +27,7 @@ struct KeysInner {
     output_messages: u64,
     input_messages: u64,
 }
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedKeys {
@@ -54,7 +55,10 @@ impl SessionKeys {
     }
 
     pub fn encrypt_output(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
         inner.output_messages += 1;
         if inner.output_messages > MAX_MESSAGES_PER_KEY {
             bail!("output key exhausted, rotation required");
@@ -65,14 +69,20 @@ impl SessionKeys {
     }
 
     pub fn decrypt_output(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
         let plaintext = decrypt(&self.output_key, inner.output_iv_count, ciphertext)?;
         inner.output_iv_count += 1;
         Ok(plaintext)
     }
 
     pub fn encrypt_input(&self, plaintext: &[u8]) -> Result<Vec<u8>> {
-        let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
         inner.input_messages += 1;
         if inner.input_messages > MAX_MESSAGES_PER_KEY {
             bail!("input key exhausted, rotation required");
@@ -83,7 +93,10 @@ impl SessionKeys {
     }
 
     pub fn decrypt_input(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
         let plaintext = decrypt(&self.input_key, inner.input_iv_count, ciphertext)?;
         inner.input_iv_count += 1;
         Ok(plaintext)
@@ -91,26 +104,28 @@ impl SessionKeys {
 
     pub fn needs_rotation(&self) -> bool {
         let inner = self.inner.lock().ok();
-        inner.map(|i| i.output_messages >= ROTATION_THRESHOLD || i.input_messages >= ROTATION_THRESHOLD).unwrap_or(false)
+        inner
+            .map(|i| {
+                i.output_messages >= ROTATION_THRESHOLD || i.input_messages >= ROTATION_THRESHOLD
+            })
+            .unwrap_or(false)
     }
 
     pub fn rotate(&self) -> Result<EncryptedKeys> {
-        let mut inner = self.inner.lock().map_err(|e| anyhow::anyhow!("lock: {}", e))?;
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
 
         let mut new_output_key = [0u8; KEY_SIZE];
         let mut new_input_key = [0u8; KEY_SIZE];
         OsRng.fill_bytes(&mut new_output_key);
         OsRng.fill_bytes(&mut new_input_key);
 
-        let encrypted_output = encrypt(&self.bootstrap_key, inner.output_iv_count, &new_output_key)?;
+        let encrypted_output =
+            encrypt(&self.bootstrap_key, inner.output_iv_count, &new_output_key)?;
         let encrypted_input = encrypt(&self.bootstrap_key, inner.input_iv_count, &new_input_key)?;
 
-        let mut output_key = [0u8; KEY_SIZE];
-        let mut input_key = [0u8; KEY_SIZE];
-        output_key.copy_from_slice(&new_output_key);
-        input_key.copy_from_slice(&new_input_key);
-
-        let iv_count = inner.output_iv_count;
         inner.output_messages = 0;
         inner.input_messages = 0;
         inner.output_iv_count = 0;
@@ -133,7 +148,7 @@ impl SessionKeys {
     pub fn bootstrap_key_b64(&self) -> String {
         base64::Engine::encode(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-            &self.bootstrap_key,
+            self.bootstrap_key,
         )
     }
 
@@ -149,8 +164,12 @@ impl SessionKeys {
 
         let mut output_key = [0u8; KEY_SIZE];
         let mut input_key = [0u8; KEY_SIZE];
-        output_key.copy_from_slice(&decrypt(bootstrap_key, encrypted.iv_count, &output_key_bytes)?);
-        input_key.copy_from_slice(&decrypt(bootstrap_key, encrypted.iv_count, &input_key_bytes)?);
+        let decrypted_output =
+            decrypt_with_slice_key(bootstrap_key, encrypted.iv_count, &output_key_bytes)?;
+        let decrypted_input =
+            decrypt_with_slice_key(bootstrap_key, encrypted.iv_count, &input_key_bytes)?;
+        output_key.copy_from_slice(&decrypted_output);
+        input_key.copy_from_slice(&decrypted_input);
 
         let mut bootstrap = [0u8; KEY_SIZE];
         bootstrap.copy_from_slice(bootstrap_key);
@@ -169,16 +188,19 @@ impl SessionKeys {
     }
 }
 
-fn make_nonce(counter: u64) -> Nonce {
+fn make_nonce(counter: u64) -> Nonce<U12> {
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     nonce_bytes[..8].copy_from_slice(&counter.to_le_bytes());
-    Nonce::from_slice(&nonce_bytes).clone()
+    *Nonce::from_slice(&nonce_bytes)
 }
 
 fn encrypt(key: &[u8; KEY_SIZE], iv_counter: u64, plaintext: &[u8]) -> Result<Vec<u8>> {
-    let cipher = Aes128Gcm::new_from_slice(key)?;
+    let cipher =
+        Aes128Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid key length: {}", e))?;
     let nonce = make_nonce(iv_counter);
-    let ciphertext = cipher.encrypt(&nonce, plaintext)?;
+    let ciphertext = cipher
+        .encrypt(&nonce, plaintext)
+        .map_err(|e| anyhow::anyhow!("encryption failed: {}", e))?;
     let mut result = nonce.to_vec();
     result.extend_from_slice(&ciphertext);
     Ok(result)
@@ -188,9 +210,21 @@ fn decrypt(key: &[u8; KEY_SIZE], iv_counter: u64, ciphertext: &[u8]) -> Result<V
     if ciphertext.len() < NONCE_SIZE {
         bail!("ciphertext too short");
     }
-    let cipher = Aes128Gcm::new_from_slice(key)?;
+    let cipher =
+        Aes128Gcm::new_from_slice(key).map_err(|e| anyhow::anyhow!("invalid key length: {}", e))?;
     let nonce = make_nonce(iv_counter);
-    cipher.decrypt(&nonce, &ciphertext[NONCE_SIZE..]).map_err(Into::into)
+    cipher
+        .decrypt(&nonce, &ciphertext[NONCE_SIZE..])
+        .map_err(|e| anyhow::anyhow!("decryption failed: {}", e))
+}
+
+fn decrypt_with_slice_key(key: &[u8], iv_counter: u64, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    if key.len() != KEY_SIZE {
+        bail!("invalid key length");
+    }
+    let mut key_arr = [0u8; KEY_SIZE];
+    key_arr.copy_from_slice(key);
+    decrypt(&key_arr, iv_counter, ciphertext)
 }
 
 pub fn generate_bootstrap_key() -> [u8; KEY_SIZE] {
@@ -202,8 +236,5 @@ pub fn generate_bootstrap_key() -> [u8; KEY_SIZE] {
 pub fn generate_session_token() -> String {
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
-    base64::Engine::encode(
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-        &bytes,
-    )
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
 }

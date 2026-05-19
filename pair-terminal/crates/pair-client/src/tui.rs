@@ -1,13 +1,14 @@
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use crossterm::terminal;
 use std::io::{self, Write};
 
+#[allow(dead_code)]
 pub struct StatusBar {
     mode: String,
     peer: String,
     connected: bool,
     start_time: std::time::Instant,
-    show_help: bool,
+    pub show_help: bool,
     show_chat: bool,
     chat_input: String,
 }
@@ -110,7 +111,9 @@ impl StatusBar {
                             return Ok(TuiEvent::OpenChat);
                         }
                         KeyCode::Char('d') => return Ok(TuiEvent::SetMode("driver".to_string())),
-                        KeyCode::Char('n') => return Ok(TuiEvent::SetMode("navigator".to_string())),
+                        KeyCode::Char('n') => {
+                            return Ok(TuiEvent::SetMode("navigator".to_string()))
+                        }
                         KeyCode::Char('m') => return Ok(TuiEvent::SetMode("collab".to_string())),
                         KeyCode::Char('r') => return Ok(TuiEvent::ToggleRecord),
                         KeyCode::Char('q') => return Ok(TuiEvent::Quit),

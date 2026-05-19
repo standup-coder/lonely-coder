@@ -14,16 +14,8 @@ pub async fn handle_ws(
     ws: WebSocketUpgrade,
     State(state): State<SharedState>,
 ) -> Response {
-    if !state.try_connect() {
-        tracing::warn!("connection rejected: server at capacity");
-        // Return a simple 429-like response by upgrading and immediately closing
-    }
     let session_mgr = state.session_mgr.clone();
-    let app_state = state.clone();
-    ws.on_upgrade(move |socket| async move {
-        handle_socket(socket, session_mgr).await;
-        app_state.disconnect();
-    })
+    ws.on_upgrade(move |socket| handle_socket(socket, session_mgr))
 }
 
 async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {

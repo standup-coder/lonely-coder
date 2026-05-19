@@ -143,7 +143,7 @@ pub async fn run(server_url: &str, url: &str) -> anyhow::Result<()> {
                             break;
                         }
                         Ok(ServerMessage::Ping) => {
-                            let _ = recv_to_ws_tx.send(ClientMessage::Pong).await;
+                            let _ = to_ws_tx.send(ClientMessage::Pong).await;
                         }
                         Ok(ServerMessage::FatalError(e)) => {
                             tracing::error!("Server error: {}", e);
@@ -208,8 +208,17 @@ pub async fn run(server_url: &str, url: &str) -> anyhow::Result<()> {
                                 .await;
                         }
                     } else {
-                        // Keys not yet established — silently drop input until E2E is ready
-                        tracing::debug!("dropping input: E2E keys not yet established");
+                        // fallback: send unencrypted before keys are established
+                        let b64 = base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &data,
+                        );
+                        let _ = to_ws_tx
+                            .send(ClientMessage::KeyInput(KeyInputPayload {
+                                data: b64,
+                                encrypted: false,
+                            }))
+                            .await;
                     }
                 }
                 Err(e) => {

@@ -1,10 +1,9 @@
-mod ws_handler;
-mod session;
-mod matching;
-mod db;
-
-use axum::{routing::{get, post}, Router};
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use clap::Parser;
+use pair_server::AppState;
 use std::sync::Arc;
 
 #[derive(Parser)]
@@ -31,19 +30,27 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
-    let db = db::Db::new(&cli.database).await?;
+    let db = pair_server::db::Db::new(&cli.database).await?;
     let app_state = Arc::new(AppState::new(db));
-    let session_mgr = Arc::new(session::SessionManager::new());
-    let match_queue = Arc::new(matching::MatchQueue::new());
 
-    let shared = Arc::new((app_state.clone(), session_mgr.clone()));
+    // Start the matching background task
+    pair_server::matching::start_matching_task(app_state.match_queue.clone(), |pair| {
+        tracing::info!(
+            "Matched users: {} and {} (session: {})",
+            pair.user_a,
+            pair.user_b,
+            pair.session_id
+        );
+    });
 
     let app = Router::new()
-        .route("/ws", get(ws_handler::handle_ws))
+        .route("/ws", get(pair_server::ws_handler::handle_ws))
         .route("/health", get(health))
-        .route("/match/register", post(matching::register_match))
-        .with_state(shared)
-        .with_state(match_queue);
+        .route(
+            "/match/register",
+            post(pair_server::matching::register_match),
+        )
+        .with_state(app_state);
 
     let addr = format!("{}:{}", cli.host, cli.port);
     tracing::info!("pair-server listening on {}", addr);
@@ -56,14 +63,4 @@ async fn main() -> anyhow::Result<()> {
 
 async fn health() -> &'static str {
     "ok"
-}
-
-pub struct AppState {
-    pub db: db::Db,
-}
-
-impl AppState {
-    pub fn new(db: db::Db) -> Self {
-        Self { db }
-    }
 }

@@ -70,10 +70,13 @@ pub async fn run(
         None
     };
 
-    let host = server_url
+    let host = format!(
+        "{}",
+        server_url
             .replace("wss://", "")
             .replace("ws://", "")
-            .replace("/ws", "").to_string();
+            .replace("/ws", "")
+    );
     let key_fragment = keys.bootstrap_key_b64();
     let share_url = format!("pair://{}/{}#{}", host, terminal_id.0, key_fragment);
 

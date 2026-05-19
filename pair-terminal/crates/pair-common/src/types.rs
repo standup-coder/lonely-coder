@@ -24,7 +24,10 @@ impl SessionId {
 
 impl UserId {
     pub fn anonymous() -> Self {
-        Self(format!("anon_{}", Uuid::new_v4().to_string()[..8].to_string()))
+        Self(format!(
+            "anon_{}",
+            &Uuid::new_v4().to_string()[..8]
+        ))
     }
 }
 

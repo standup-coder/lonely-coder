@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+#[allow(dead_code)]
 pub struct TerminalSession {
     pub terminal_id: String,
     pub host_tx: mpsc::Sender<ServerForwardMsg>,
@@ -23,6 +24,7 @@ pub struct SessionManager {
     guests: RwLock<HashMap<String, Vec<GuestHandle>>>,
 }
 
+#[allow(dead_code)]
 struct TerminalHandle {
     terminal_id: String,
     host_user_id: String,
@@ -32,16 +34,20 @@ struct TerminalHandle {
     guest_count: Arc<std::sync::atomic::AtomicU32>,
 }
 
+#[allow(dead_code)]
 struct GuestHandle {
     guest_id: String,
     user_id: String,
-    output_rx: broadcast::Receiver<String>,
 }
 
 const MAX_TERMINALS: usize = 200;
 const MAX_GUESTS_PER_TERMINAL: usize = 50;
-const MAX_ROWS: u16 = 500;
-const MAX_COLS: u16 = 500;
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl SessionManager {
     pub fn new() -> Self {
@@ -56,7 +62,10 @@ impl SessionManager {
         terminal_id: String,
         user_id: String,
         host_tx: mpsc::Sender<ServerForwardMsg>,
-    ) -> anyhow::Result<(broadcast::Receiver<String>, tokio::sync::watch::Receiver<bool>)> {
+    ) -> anyhow::Result<(
+        broadcast::Receiver<String>,
+        tokio::sync::watch::Receiver<bool>,
+    )> {
         let mut terminals = self.terminals.write().await;
         if terminals.len() >= MAX_TERMINALS {
             anyhow::bail!("server at capacity ({} terminals)", MAX_TERMINALS);
@@ -86,33 +95,44 @@ impl SessionManager {
         guest_id: String,
         user_id: String,
     ) -> anyhow::Result<broadcast::Receiver<String>> {
-        let terminals = self.terminals.read().await;
-        let handle = terminals.get(terminal_id)
-            .ok_or_else(|| anyhow::anyhow!("terminal not found"))?;
+        // Get the output_tx subscriber before touching guests map
+        let output_rx = {
+            let terminals = self.terminals.read().await;
+            let handle = terminals
+                .get(terminal_id)
+                .ok_or_else(|| anyhow::anyhow!("terminal not found"))?;
 
-        let count = handle.guest_count.load(std::sync::atomic::Ordering::Relaxed);
-        if count >= MAX_GUESTS_PER_TERMINAL as u32 {
-            anyhow::bail!("terminal at capacity ({} guests)", MAX_GUESTS_PER_TERMINAL);
-        }
+            let count = handle
+                .guest_count
+                .load(std::sync::atomic::Ordering::Relaxed);
+            if count >= MAX_GUESTS_PER_TERMINAL as u32 {
+                anyhow::bail!("terminal at capacity ({} guests)", MAX_GUESTS_PER_TERMINAL);
+            }
 
-        let output_rx = handle.output_tx.subscribe();
-        handle.guest_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        drop(terminals);
+            let rx = handle.output_tx.subscribe();
+            handle
+                .guest_count
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            rx
+        };
 
         let mut guests = self.guests.write().await;
-        guests.entry(terminal_id.to_string())
+        guests
+            .entry(terminal_id.to_string())
             .or_insert_with(Vec::new)
             .push(GuestHandle {
                 guest_id,
                 user_id,
-                output_rx: handle.output_tx.subscribe(),
             });
 
         Ok(output_rx)
     }
 
-    pub async fn forward_to_host(&self, terminal_id: &str, msg: ServerForwardMsg) -> anyhow::Result<()> {
+    pub async fn forward_to_host(
+        &self,
+        terminal_id: &str,
+        msg: ServerForwardMsg,
+    ) -> anyhow::Result<()> {
         let terminals = self.terminals.read().await;
         if let Some(handle) = terminals.get(terminal_id) {
             handle.host_tx.send(msg).await?;
@@ -142,7 +162,8 @@ impl SessionManager {
 
     pub async fn guest_count(&self, terminal_id: &str) -> u32 {
         let terminals = self.terminals.read().await;
-        terminals.get(terminal_id)
+        terminals
+            .get(terminal_id)
             .map(|h| h.guest_count.load(std::sync::atomic::Ordering::Relaxed))
             .unwrap_or(0)
     }

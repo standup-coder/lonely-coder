@@ -1,12 +1,10 @@
 use crate::connect::{connect, serialize_message};
 use crate::raw_guard::RawModeGuard;
-use crate::tui::StatusBar;
+use futures_util::{SinkExt, StreamExt};
 use pair_common::protocol::*;
 use pair_common::types::{PairMode, SkillLevel, UserId};
-use futures_util::{SinkExt, StreamExt};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 pub async fn run(
     server_url: &str,
@@ -45,7 +43,7 @@ pub async fn run(
     });
 
     ws.send(tokio_tungstenite::tungstenite::Message::Text(
-        serialize_message(&register)?,
+        serialize_message(&register)?.into(),
     ))
     .await?;
 
@@ -59,7 +57,8 @@ pub async fn run(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text))) => {
-                        match serde_json::from_str::<ServerMessage>(&text) {
+                        let text_str = text.to_string();
+                        match serde_json::from_str::<ServerMessage>(&text_str) {
                             Ok(ServerMessage::MatchStatus(status)) => {
                                 println!(
                                     "\rpair: Position in queue: {} | ETA: ~{}s  ",
@@ -73,9 +72,6 @@ pub async fn run(
 
                                 let _ = ws_tx.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
 
-                                // Switch to join mode with the matched session
-                                // In a real implementation, we'd get the encrypted join URL from the server
-                                // For now, print instructions
                                 println!("pair: Connection established! Starting pair session...");
                                 running.store(false, Ordering::Relaxed);
                             }
@@ -90,7 +86,7 @@ pub async fn run(
                             _ => {}
                         }
                     }
-                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None | Err(_) => {
+                    Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_))) | None | Some(Err(_)) => {
                         println!("\npair: Disconnected from server.");
                         break;
                     }
@@ -100,7 +96,7 @@ pub async fn run(
             _ = tokio::signal::ctrl_c() => {
                 println!("\npair: Cancelled match search.");
                 let _ = ws_tx.send(tokio_tungstenite::tungstenite::Message::Text(
-                    serialize_message(&ClientMessage::MatchCancel)?,
+                    serialize_message(&ClientMessage::MatchCancel)?.into(),
                 )).await;
                 let _ = ws_tx.send(tokio_tungstenite::tungstenite::Message::Close(None)).await;
                 running.store(false, Ordering::Relaxed);

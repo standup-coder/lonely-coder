@@ -1,11 +1,11 @@
-mod share;
+mod connect;
 mod join;
 mod match_cmd;
-mod pty_host;
 mod pty_guest;
+mod pty_host;
 mod raw_guard;
+mod share;
 mod tui;
-mod connect;
 
 use clap::{Parser, Subcommand};
 
@@ -104,15 +104,23 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Share { command, mode, record, p2p } => {
-            share::run(&cli.server, &cli.signaling, &command, &mode, record, p2p).await
-        }
+        Commands::Share {
+            command,
+            mode,
+            record,
+            p2p,
+        } => share::run(&cli.server, &cli.signaling, &command, &mode, record, p2p).await,
         Commands::Join { url } => join::run(&cli.server, &url).await,
-        Commands::Match { languages, skill, mode } => {
-            match_cmd::run(&cli.server, &languages, &skill, &mode).await
-        }
+        Commands::Match {
+            languages,
+            skill,
+            mode,
+        } => match_cmd::run(&cli.server, &languages, &skill, &mode).await,
         Commands::Login { provider } => {
-            println!("Login with {} is not yet implemented. Use pair profile --anonymous.", provider);
+            println!(
+                "Login with {} is not yet implemented. Use pair profile --anonymous.",
+                provider
+            );
             Ok(())
         }
         Commands::Profile => {
@@ -123,9 +131,7 @@ async fn main() -> anyhow::Result<()> {
             println!("Leaderboard feature coming soon.");
             Ok(())
         }
-        Commands::Replay { path } => {
-            replay_file(&path).await
-        }
+        Commands::Replay { path } => replay_file(&path).await,
         Commands::Upload { path } => {
             println!("Upload feature coming soon. File: {}", path);
             Ok(())
@@ -135,7 +141,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn replay_file(path: &str) -> anyhow::Result<()> {
     use pair_common::recording::*;
-    use std::io::{Read, Write};
+    use std::io::Write;
 
     let reader = AsciiCastReader::from_file(&std::path::PathBuf::from(path))?;
     let events = reader.events();

@@ -2,6 +2,7 @@ use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::io::{Read, Write};
 
+#[allow(dead_code)]
 pub struct PtyHost {
     reader: Box<dyn Read + Send>,
     writer: Box<dyn Write + Send>,

@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::time::Instant;
 
+#[allow(dead_code)]
 pub struct AsciiCastWriter {
     file: std::fs::File,
     start_time: Instant,
@@ -44,11 +45,7 @@ impl AsciiCastWriter {
     pub fn write_output(&mut self, data: &[u8]) -> Result<()> {
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let text = String::from_utf8_lossy(data).to_string();
-        let event = format!(
-            "[{:.6}, \"o\", {}]",
-            elapsed,
-            serde_json::to_string(&text)?
-        );
+        let event = format!("[{:.6}, \"o\", {}]", elapsed, serde_json::to_string(&text)?);
         writeln!(self.file, "{}", event)?;
         self.file.flush()?;
         Ok(())
@@ -57,11 +54,7 @@ impl AsciiCastWriter {
     pub fn write_input(&mut self, data: &[u8]) -> Result<()> {
         let elapsed = self.start_time.elapsed().as_secs_f64();
         let text = String::from_utf8_lossy(data).to_string();
-        let event = format!(
-            "[{:.6}, \"i\", {}]",
-            elapsed,
-            serde_json::to_string(&text)?
-        );
+        let event = format!("[{:.6}, \"i\", {}]", elapsed, serde_json::to_string(&text)?);
         writeln!(self.file, "{}", event)?;
         self.file.flush()?;
         Ok(())

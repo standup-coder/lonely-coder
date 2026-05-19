@@ -24,7 +24,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 base64 = "0.22"
 url = "2"
 chrono = { version = "0.4", features = ["serde"] }
+generic-array = "0.14"
+futures-util = "0.3"
+libc = "0.2"

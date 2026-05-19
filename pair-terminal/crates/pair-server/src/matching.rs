@@ -1,9 +1,8 @@
-use std::collections::HashMap;
+use axum::{extract::State, Json};
+use pair_common::types::{MatchPreferences, SkillLevel};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use pair_common::types::{SkillLevel, MatchPreferences};
-use axum::{extract::State, Json};
 
 #[derive(Debug, Clone)]
 pub struct MatchRequest {
@@ -26,6 +25,12 @@ pub struct MatchQueue {
     match_threshold: f64,
 }
 
+impl Default for MatchQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchQueue {
     pub fn new() -> Self {
         Self {
@@ -41,11 +46,7 @@ impl MatchQueue {
 
     pub async fn dequeue(&self, user_id: &str) -> Option<MatchRequest> {
         let mut queue = self.queue.write().await;
-        if let Some(pos) = queue.iter().position(|r| r.user_id == user_id) {
-            Some(queue.remove(pos))
-        } else {
-            None
-        }
+        queue.iter().position(|r| r.user_id == user_id).map(|pos| queue.remove(pos))
     }
 
     pub async fn position(&self, user_id: &str) -> Option<usize> {
@@ -102,26 +103,34 @@ impl MatchQueue {
     }
 }
 
-fn calculate_match_score(a: &MatchRequest, b: &MatchRequest) -> f64 {
+pub fn calculate_match_score(a: &MatchRequest, b: &MatchRequest) -> f64 {
     let lang_a: std::collections::HashSet<_> = a.preferences.languages.iter().cloned().collect();
     let lang_b: std::collections::HashSet<_> = b.preferences.languages.iter().cloned().collect();
 
     let intersection = lang_a.intersection(&lang_b).count();
     let union = lang_a.union(&lang_b).count();
 
-    let lang_score = if union == 0 { 0.0 } else { intersection as f64 / union as f64 };
+    let lang_score = if union == 0 {
+        0.0
+    } else {
+        intersection as f64 / union as f64
+    };
 
     let skill_a = skill_value(&a.preferences.skill_level);
     let skill_b = skill_value(&b.preferences.skill_level);
     let skill_diff = (skill_a - skill_b).abs();
     let skill_score = 1.0 - skill_diff / 2.0;
 
-    let mode_match = if a.preferences.mode == b.preferences.mode { 0.2 } else { 0.0 };
+    let mode_match = if a.preferences.mode == b.preferences.mode {
+        0.2
+    } else {
+        0.0
+    };
 
     lang_score + skill_score + mode_match
 }
 
-fn skill_value(level: &SkillLevel) -> f64 {
+pub fn skill_value(level: &SkillLevel) -> f64 {
     match level {
         SkillLevel::Beginner => 0.0,
         SkillLevel::Intermediate => 1.0,
@@ -129,7 +138,10 @@ fn skill_value(level: &SkillLevel) -> f64 {
     }
 }
 
-pub fn start_matching_task(queue: Arc<MatchQueue>, on_match: impl Fn(MatchedPair) + Send + Sync + 'static) {
+pub fn start_matching_task(
+    queue: Arc<MatchQueue>,
+    on_match: impl Fn(MatchedPair) + Send + Sync + 'static,
+) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(500));
         loop {
@@ -152,7 +164,7 @@ pub struct MatchResponse {
 }
 
 pub async fn register_match(
-    State(queue): State<Arc<MatchQueue>>,
+    State(state): State<Arc<crate::AppState>>,
     Json(payload): Json<MatchRegisterPayload>,
 ) -> Json<MatchResponse> {
     let request = MatchRequest {
@@ -162,9 +174,9 @@ pub async fn register_match(
         enqueued_at: std::time::Instant::now(),
     };
 
-    queue.enqueue(request).await;
+    state.match_queue.enqueue(request).await;
 
-    let position = queue.position(&payload.user_id).await.unwrap_or(0) + 1;
+    let position = state.match_queue.position(&payload.user_id).await.unwrap_or(0) + 1;
 
     Json(MatchResponse {
         status: "queued".to_string(),

@@ -1,5 +1,5 @@
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqlitePool};
 use anyhow::Result;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 pub struct Db {
     pool: SqlitePool,
@@ -26,8 +26,10 @@ impl Db {
                 total_sessions INTEGER DEFAULT 0,
                 total_duration_secs INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
-            )"
-        ).execute(&pool).await?;
+            )",
+        )
+        .execute(&pool)
+        .await?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS sessions (
@@ -39,8 +41,10 @@ impl Db {
                 ended_at TEXT,
                 duration_secs INTEGER DEFAULT 0,
                 recorded INTEGER DEFAULT 0
-            )"
-        ).execute(&pool).await?;
+            )",
+        )
+        .execute(&pool)
+        .await?;
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS matches (
@@ -51,8 +55,10 @@ impl Db {
                 matched_at TEXT,
                 accepted INTEGER DEFAULT 0,
                 created_at TEXT DEFAULT (datetime('now'))
-            )"
-        ).execute(&pool).await?;
+            )",
+        )
+        .execute(&pool)
+        .await?;
 
         Ok(Self { pool })
     }

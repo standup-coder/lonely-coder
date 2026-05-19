@@ -12,6 +12,7 @@ pub enum ClientMessage {
     AesKeys(AesKeysPayload),
     Chat(ChatPayload),
     Ping,
+    Pong,
     MatchRegister(MatchRegisterPayload),
     MatchCancel,
     SnapshotRequest,

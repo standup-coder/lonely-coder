@@ -23,3 +23,5 @@ url = { workspace = true }
 crossterm = "0.28"
 portable-pty = "0.9"
 ratatui = "0.29"
+futures-util = { workspace = true }
+libc = { workspace = true }
