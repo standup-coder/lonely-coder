@@ -1,0 +1,26 @@
+# Build artifacts
+target/
+*.rlib
+*.so
+*.dylib
+*.o
+*.a
+dist/
+build/
+out/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Dependency / vendor caches
+node_modules/
+__pycache__/
+.venv/
+venv/
+
+# Accidental git directory copies
+.git 2/
+.git*/
