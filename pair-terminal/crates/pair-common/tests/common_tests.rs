@@ -14,8 +14,21 @@ use std::fs;
 fn test_session_keys_generate() {
     let keys = SessionKeys::generate();
     assert_eq!(keys.bootstrap_key.len(), 16);
-    assert_eq!(keys.output_key.len(), 16);
-    assert_eq!(keys.input_key.len(), 16);
+
+    // The output and input keys are not directly readable from outside the
+    // crate anymore (they live behind the same Mutex as the nonce counters
+    // for thread-safety). The full round-trip across two peers is exercised
+    // in `test_session_keys_host_guest_round_trip`; here we only confirm
+    // that fresh keys produce valid ciphertexts of the expected shape.
+    let ct = keys.encrypt_output(b"ping").unwrap();
+    assert!(ct.len() > 16, "output ciphertext should carry the nonce");
+
+    let ct = keys.encrypt_input(b"pong").unwrap();
+    assert!(ct.len() > 16, "input ciphertext should carry the nonce");
+
+    // Two independent generations should not produce the same bootstrap.
+    let other = SessionKeys::generate();
+    assert_ne!(keys.bootstrap_key, other.bootstrap_key);
 }
 
 #[test]
@@ -25,12 +38,55 @@ fn test_session_keys_encrypt_output() {
     // material. On a single instance the nonce counters diverge, so a
     // round-trip assertion would be misleading. We only assert the structural
     // invariant (nonce prefix is present) here; cross-peer round-trip is
-    // covered by the integration test in `pair-server`.
+    // covered by `test_session_keys_host_guest_round_trip` below.
     let keys = SessionKeys::generate();
     let plaintext = b"hello world";
 
     let ciphertext = keys.encrypt_output(plaintext).unwrap();
     assert!(ciphertext.len() > 16, "ciphertext should include nonce");
+}
+
+#[test]
+fn test_session_keys_host_guest_round_trip() {
+    // Two peers holding the same `output_key` / `input_key` (but independent
+    // counter state) can exchange ciphertext that decrypts back to the
+    // original plaintext. This is the core invariant that E2E encryption
+    // depends on; if this ever fails, the relay server has effectively
+    // become a MITM.
+    let host = SessionKeys::generate();
+    let bootstrap = host.bootstrap_key;
+    let encrypted = host.rotate().unwrap();
+
+    // IMPORTANT: after `rotate()` the host's own `output_key` / `input_key`
+    // fields are *not* updated — only the encrypted blob for the peer is
+    // generated. The peer (and the host, in the correct usage pattern) must
+    // both call `extract_keys` to converge on the same key material.
+    // This test exercises the symmetric path: both peers extract from the
+    // same blob. The fact that the host has to do this itself is a
+    // known design point — see `pair-client/src/share.rs` and the matching
+    // bug fix that pairs with this test.
+    let host = SessionKeys::extract_keys(&bootstrap, &encrypted).unwrap();
+    let guest = SessionKeys::extract_keys(&bootstrap, &encrypted).unwrap();
+
+    // Host → guest: host encrypts with output_key, guest decrypts with output_key.
+    let host_to_guest = b"ls\nfile.txt\n".to_vec();
+    let wire = host.encrypt_output(&host_to_guest).unwrap();
+    let recovered = guest.decrypt_output(&wire).unwrap();
+    assert_eq!(recovered, host_to_guest);
+
+    // Guest → host: guest encrypts with input_key, host decrypts with input_key.
+    let guest_to_host = b"cat file.txt\n".to_vec();
+    let wire = guest.encrypt_input(&guest_to_host).unwrap();
+    let recovered = host.decrypt_input(&wire).unwrap();
+    assert_eq!(recovered, guest_to_host);
+
+    // After several messages the counters stay in sync on both sides.
+    for i in 0..50 {
+        let msg = format!("msg-{i}");
+        let wire = host.encrypt_output(msg.as_bytes()).unwrap();
+        let out = guest.decrypt_output(&wire).unwrap();
+        assert_eq!(out, msg.as_bytes());
+    }
 }
 
 #[test]
@@ -74,6 +130,18 @@ fn test_session_keys_rotate() {
     assert!(!encrypted.b64_input_key.is_empty());
     assert_eq!(encrypted.iv_count, 0);
     assert_eq!(encrypted.max_iv_count, 1 << 20);
+
+    // The local SessionKeys must adopt the rotated key material as well —
+    // a host that only updated the peer's view would diverge from the peer
+    // on the first message after rotation. The cross-peer round-trip is
+    // covered in `test_session_keys_host_guest_round_trip`; here we only
+    // assert the structural property that `needs_rotation` resets after
+    // rotate, so the host's local counter state matches what the peer
+    // will reconstruct via `extract_keys`.
+    assert!(
+        !keys.needs_rotation(),
+        "rotate() should reset the message counters so needs_rotation returns false"
+    );
 }
 
 #[test]

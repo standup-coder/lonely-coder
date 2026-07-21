@@ -76,7 +76,7 @@ pub async fn run(
         .replace("/ws", "")
         .to_string();
     let key_fragment = keys.bootstrap_key_b64();
-    let share_url = format!("pair://{}/{}#{}", host, terminal_id.0, key_fragment);
+    let share_url = build_share_url(&host, &terminal_id.0, &key_fragment);
 
     println!("\x1b[s\x1b[Kpair: Share this URL with your partner:");
     println!("  {}\x1b[u", share_url);
@@ -336,4 +336,40 @@ pub async fn run(
     println!("\n\x1b[2J\x1b[Hpair: Session ended.");
 
     Ok(())
+}
+
+/// Build a `pair://host/terminal_id#bootstrap_key` URL that the host hands
+/// to the guest out-of-band. The inverse of `join::parse_pair_url`.
+pub(crate) fn build_share_url(host: &str, terminal_id: &str, bootstrap_key: &str) -> String {
+    format!("pair://{}/{}#{}", host, terminal_id, bootstrap_key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn build_share_url_happy_path() {
+        let url = build_share_url("server.example.com", "term-123", "bootstrapB64Key");
+        assert_eq!(url, "pair://server.example.com/term-123#bootstrapB64Key");
+    }
+
+    #[test]
+    fn build_share_url_inverse_of_parse() {
+        let (host, terminal_id, key) = ("server.example.com", "term-456", "ab12cd34");
+        let url = build_share_url(host, terminal_id, key);
+        // parse_pair_url returns the host+terminal as a single path and the
+        // key as the fragment. The actual session join happens over the
+        // WebSocket handshake; this round-trip just verifies the URL
+        // builder does not corrupt any of the three components.
+        let (path, parsed_key) = crate::join::parse_pair_url(&url).unwrap();
+        assert_eq!(path, format!("{}/{}", host, terminal_id));
+        assert_eq!(parsed_key, key);
+    }
+
+    #[test]
+    fn build_share_url_handles_host_with_port() {
+        let url = build_share_url("relay.local:8080", "term-1", "key1");
+        assert_eq!(url, "pair://relay.local:8080/term-1#key1");
+    }
 }

@@ -252,7 +252,16 @@ pub async fn run(server_url: &str, url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_pair_url(url: &str) -> anyhow::Result<(String, String)> {
+/// Parse a `pair://<host>/<session_id>#<bootstrap_key>` URL into its two
+/// parts (the path portion and the fragment). The host is included as
+/// part of the path on the wire (see `share::build_share_url`); the actual
+/// session join is performed via the WebSocket handshake, so the value
+/// returned here is currently only used for display purposes.
+///
+/// The function is intentionally tolerant: it accepts the prefix if
+/// present, strips stray slashes around the path, and trims whitespace
+/// around the key.
+pub(crate) fn parse_pair_url(url: &str) -> anyhow::Result<(String, String)> {
     let url = url.strip_prefix("pair://").unwrap_or(url);
 
     let (session_part, key_part) = if let Some(idx) = url.find('#') {
@@ -269,4 +278,62 @@ fn parse_pair_url(url: &str) -> anyhow::Result<(String, String)> {
     }
 
     Ok((session_id, bootstrap_key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pair_url_round_trips_with_share_build() {
+        // The share.rs build function emits `pair://host/terminal_id#key`.
+        // Parse it back and confirm we get the same components (host/term
+        // is treated as a single path segment, the key is the fragment).
+        let url = "pair://relay.example.com/term-123#bootstrapKeyB64";
+        let (path, key) = parse_pair_url(url).unwrap();
+        assert_eq!(path, "relay.example.com/term-123");
+        assert_eq!(key, "bootstrapKeyB64");
+    }
+
+    #[test]
+    fn parse_pair_url_tolerates_stray_slashes() {
+        let (path, key) = parse_pair_url("pair:///relay/term/#key").unwrap();
+        assert_eq!(path, "relay/term");
+        assert_eq!(key, "key");
+    }
+
+    #[test]
+    fn parse_pair_url_without_scheme() {
+        let (path, key) = parse_pair_url("relay/term#key").unwrap();
+        assert_eq!(path, "relay/term");
+        assert_eq!(key, "key");
+    }
+
+    #[test]
+    fn parse_pair_url_rejects_missing_key() {
+        let err = parse_pair_url("pair://relay/term").unwrap_err();
+        assert!(
+            err.to_string().contains("must contain a #key"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_pair_url_rejects_empty_path() {
+        let err = parse_pair_url("pair://#key").unwrap_err();
+        assert!(err.to_string().contains("missing"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_pair_url_rejects_empty_key() {
+        let err = parse_pair_url("pair://relay/term#").unwrap_err();
+        assert!(err.to_string().contains("missing"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_pair_url_trims_whitespace_around_key() {
+        let (path, key) = parse_pair_url("pair://relay/term#\t  key  \n").unwrap();
+        assert_eq!(path, "relay/term");
+        assert_eq!(key, "key");
+    }
 }

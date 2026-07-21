@@ -15,13 +15,13 @@ const KEY_SIZE: usize = 16;
 
 pub struct SessionKeys {
     pub bootstrap_key: [u8; KEY_SIZE],
-    pub output_key: [u8; KEY_SIZE],
-    pub input_key: [u8; KEY_SIZE],
     inner: Mutex<KeysInner>,
 }
 
 #[derive(Default)]
 struct KeysInner {
+    output_key: [u8; KEY_SIZE],
+    input_key: [u8; KEY_SIZE],
     output_iv_count: u64,
     input_iv_count: u64,
     output_messages: u64,
@@ -47,9 +47,11 @@ impl SessionKeys {
 
         Self {
             bootstrap_key,
-            output_key,
-            input_key,
-            inner: Mutex::new(KeysInner::default()),
+            inner: Mutex::new(KeysInner {
+                output_key,
+                input_key,
+                ..KeysInner::default()
+            }),
         }
     }
 
@@ -62,7 +64,7 @@ impl SessionKeys {
         if inner.output_messages > MAX_MESSAGES_PER_KEY {
             bail!("output key exhausted, rotation required");
         }
-        let ciphertext = encrypt(&self.output_key, inner.output_iv_count, plaintext)?;
+        let ciphertext = encrypt(&inner.output_key, inner.output_iv_count, plaintext)?;
         inner.output_iv_count += 1;
         Ok(ciphertext)
     }
@@ -72,7 +74,7 @@ impl SessionKeys {
             .inner
             .lock()
             .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
-        let plaintext = decrypt(&self.output_key, inner.output_iv_count, ciphertext)?;
+        let plaintext = decrypt(&inner.output_key, inner.output_iv_count, ciphertext)?;
         inner.output_iv_count += 1;
         Ok(plaintext)
     }
@@ -86,7 +88,7 @@ impl SessionKeys {
         if inner.input_messages > MAX_MESSAGES_PER_KEY {
             bail!("input key exhausted, rotation required");
         }
-        let ciphertext = encrypt(&self.input_key, inner.input_iv_count, plaintext)?;
+        let ciphertext = encrypt(&inner.input_key, inner.input_iv_count, plaintext)?;
         inner.input_iv_count += 1;
         Ok(ciphertext)
     }
@@ -96,7 +98,7 @@ impl SessionKeys {
             .inner
             .lock()
             .map_err(|e| anyhow::anyhow!("lock: {}", e))?;
-        let plaintext = decrypt(&self.input_key, inner.input_iv_count, ciphertext)?;
+        let plaintext = decrypt(&inner.input_key, inner.input_iv_count, ciphertext)?;
         inner.input_iv_count += 1;
         Ok(plaintext)
     }
@@ -124,6 +126,14 @@ impl SessionKeys {
         let encrypted_output =
             encrypt(&self.bootstrap_key, inner.output_iv_count, &new_output_key)?;
         let encrypted_input = encrypt(&self.bootstrap_key, inner.input_iv_count, &new_input_key)?;
+
+        // Update the local key material as well so the caller (the host)
+        // and the peer converge on the same output_key / input_key after
+        // the peer calls `extract_keys`. Without this, the host would keep
+        // encrypting with the old keys while the peer decrypts with the
+        // new ones and the session would break the moment a guest joins.
+        inner.output_key = new_output_key;
+        inner.input_key = new_input_key;
 
         inner.output_messages = 0;
         inner.input_messages = 0;
@@ -175,9 +185,9 @@ impl SessionKeys {
 
         Ok(Self {
             bootstrap_key: bootstrap,
-            output_key,
-            input_key,
             inner: Mutex::new(KeysInner {
+                output_key,
+                input_key,
                 output_iv_count: encrypted.iv_count,
                 input_iv_count: encrypted.iv_count,
                 output_messages: 0,
