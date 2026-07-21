@@ -218,6 +218,9 @@ async fn test_match_queue_try_match_sufficient_users() {
     let matched = queue.try_match().await;
     assert!(matched.is_some());
     let matched = matched.unwrap();
-    assert!((matched.user_a == "user1" && matched.user_b == "user2") || (matched.user_a == "user2" && matched.user_b == "user1"));
+    assert!(
+        (matched.user_a == "user1" && matched.user_b == "user2")
+            || (matched.user_a == "user2" && matched.user_b == "user1")
+    );
     assert_eq!(matched.session_id.len(), 24);
 }

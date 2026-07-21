@@ -61,6 +61,10 @@ impl PtyHost {
         Ok(())
     }
 
+    /// Forward a TIOCSWINSZ-style resize to the underlying PTY. The host
+    /// side of `share.rs` does not yet react to local SIGWINCH; the
+    /// implementation is ready and the method is exposed as public API.
+    #[allow(dead_code)]
     pub fn resize(&mut self, cols: u16, rows: u16) -> Result<()> {
         self.cols = cols;
         self.rows = rows;
@@ -73,10 +77,15 @@ impl PtyHost {
         Ok(())
     }
 
+    /// Last-known terminal columns. Tracked for `resize` and for future
+    /// status-bar rendering of the shared geometry.
+    #[allow(dead_code)]
     pub fn cols(&self) -> u16 {
         self.cols
     }
 
+    /// Last-known terminal rows. See `cols` for rationale.
+    #[allow(dead_code)]
     pub fn rows(&self) -> u16 {
         self.rows
     }

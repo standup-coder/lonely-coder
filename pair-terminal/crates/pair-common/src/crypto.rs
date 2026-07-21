@@ -28,7 +28,6 @@ struct KeysInner {
     input_messages: u64,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedKeys {
     pub b64_output_key: String,

@@ -120,10 +120,7 @@ impl SessionManager {
         guests
             .entry(terminal_id.to_string())
             .or_insert_with(Vec::new)
-            .push(GuestHandle {
-                guest_id,
-                user_id,
-            });
+            .push(GuestHandle { guest_id, user_id });
 
         Ok(output_rx)
     }

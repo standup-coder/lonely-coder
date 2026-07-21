@@ -26,6 +26,10 @@ impl StatusBar {
         }
     }
 
+    /// Update the connection indicator. Currently the event loop in
+    /// `share.rs` / `join.rs` drives the status from a single place, so this
+    /// is wired in for future richer UI states (e.g. mid-reconnect spinner).
+    #[allow(dead_code)]
     pub fn set_connected(&mut self, connected: bool) {
         self.connected = connected;
     }
@@ -34,10 +38,18 @@ impl StatusBar {
         self.show_help = !self.show_help;
     }
 
+    /// Toggle the chat input panel. Wired to the 'c' hotkey path; kept as
+    /// a method so external code (e.g. an incoming chat message) can also
+    /// open the panel.
+    #[allow(dead_code)]
     pub fn toggle_chat(&mut self) {
         self.show_chat = !self.show_chat;
     }
 
+    /// Render the status bar. The current event loop uses helper printlns
+    /// directly for the help/chat overlays; this method is the unified
+    /// entry point once the overlay state machine is consolidated.
+    #[allow(dead_code)]
     pub fn render(&self) -> anyhow::Result<()> {
         let mut stdout = io::stdout().lock();
 
@@ -155,7 +167,14 @@ impl StatusBar {
     }
 }
 
+/// Events produced by the TUI input loop.
+///
+/// `SetMode` and `ChatMessage` carry payloads that are populated today but
+/// not yet consumed by the caller. The wrappers are kept so the protocol
+/// surface is stable once `share.rs` / `join.rs` start acting on mode
+/// switches and chat sends.
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum TuiEvent {
     ToggleHelp,
     OpenChat,

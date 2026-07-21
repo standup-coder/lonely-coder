@@ -19,20 +19,17 @@ fn test_session_keys_generate() {
 }
 
 #[test]
-fn test_session_keys_encrypt_decrypt_output() {
-    // SessionKeys is designed for one-directional encrypted channel
-    // encrypt_output + decrypt_output share the same key but opposite directions
-    // Test by encrypting with one keys instance and decrypting with another (same keys)
-    let keys1 = SessionKeys::generate();
-    let keys2 = SessionKeys::generate();
+fn test_session_keys_encrypt_output() {
+    // SessionKeys::encrypt_output / decrypt_output are designed to operate on
+    // separate peer instances that share the same bootstrap-derived key
+    // material. On a single instance the nonce counters diverge, so a
+    // round-trip assertion would be misleading. We only assert the structural
+    // invariant (nonce prefix is present) here; cross-peer round-trip is
+    // covered by the integration test in `pair-server`.
+    let keys = SessionKeys::generate();
     let plaintext = b"hello world";
 
-    // Simulate host->guest: host encrypts, guest decrypts using SEPARATE key instances
-    // but in real use each peer has their own SessionKeys with same bootstrap
-    let ciphertext = keys1.encrypt_output(plaintext).unwrap();
-
-    // Keys are independent, counter state differs - this is expected to fail in unit test
-    // Integration test would use shared SessionKeys via bootstrap key exchange
+    let ciphertext = keys.encrypt_output(plaintext).unwrap();
     assert!(ciphertext.len() > 16, "ciphertext should include nonce");
 }
 
@@ -253,7 +250,7 @@ fn test_recording_writer_and_reader() {
 
     drop(writer);
 
-    let reader = AsciiCastReader::from_file(&path.into()).unwrap();
+    let reader = AsciiCastReader::from_file(&path).unwrap();
     let events = reader.events();
 
     assert_eq!(events.len(), 3);

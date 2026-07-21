@@ -13,14 +13,34 @@ out/
 .idea/
 .vscode/
 *.swp
+*.swo
 .DS_Store
+Thumbs.db
 
 # Dependency / vendor caches
 node_modules/
 __pycache__/
 .venv/
 venv/
+*.egg-info/
+
+# Logs / temp / env
+*.log
+*.tmp
+.env
+.env.local
+.env.*.local
 
 # Accidental git directory copies
 .git 2/
 .git*/
+
+# Rust-specific
+**/*.rs.bk
+**/*.pdb
+
+# OS metadata
+*~
+
+# Local agent / IDE config
+.claude/

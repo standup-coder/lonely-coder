@@ -46,7 +46,10 @@ impl MatchQueue {
 
     pub async fn dequeue(&self, user_id: &str) -> Option<MatchRequest> {
         let mut queue = self.queue.write().await;
-        queue.iter().position(|r| r.user_id == user_id).map(|pos| queue.remove(pos))
+        queue
+            .iter()
+            .position(|r| r.user_id == user_id)
+            .map(|pos| queue.remove(pos))
     }
 
     pub async fn position(&self, user_id: &str) -> Option<usize> {
@@ -176,7 +179,12 @@ pub async fn register_match(
 
     state.match_queue.enqueue(request).await;
 
-    let position = state.match_queue.position(&payload.user_id).await.unwrap_or(0) + 1;
+    let position = state
+        .match_queue
+        .position(&payload.user_id)
+        .await
+        .unwrap_or(0)
+        + 1;
 
     Json(MatchResponse {
         status: "queued".to_string(),

@@ -10,10 +10,7 @@ use std::sync::Arc;
 
 type SharedState = Arc<crate::AppState>;
 
-pub async fn handle_ws(
-    ws: WebSocketUpgrade,
-    State(state): State<SharedState>,
-) -> Response {
+pub async fn handle_ws(ws: WebSocketUpgrade, State(state): State<SharedState>) -> Response {
     if !state.try_connect() {
         tracing::warn!("connection rejected: server at capacity");
         // Return a simple 429-like response by upgrading and immediately closing
@@ -124,13 +121,11 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                                 let _ = sm.broadcast_output(&tid_clone, msg).await;
                                             }
                                             ServerForwardMsg::Resize { cols, rows } => {
-                                                let msg = serde_json::to_string(
-                                                    &ServerMessage::Resize(ResizePayload {
-                                                        cols,
-                                                        rows,
-                                                    }),
-                                                )
-                                                .unwrap_or_default();
+                                                let msg =
+                                                    serde_json::to_string(&ServerMessage::Resize(
+                                                        ResizePayload { cols, rows },
+                                                    ))
+                                                    .unwrap_or_default();
                                                 let _ = sm.broadcast_output(&tid_clone, msg).await;
                                             }
                                             ServerForwardMsg::Chat(text) => {
@@ -162,11 +157,10 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                         let tid = match h.terminal_id.as_ref() {
                             Some(t) => t,
                             None => {
-                                let err_msg =
-                                    serde_json::to_string(&ServerMessage::FatalError(
-                                        "guest must specify terminal_id".to_string(),
-                                    ))
-                                    .unwrap_or_default();
+                                let err_msg = serde_json::to_string(&ServerMessage::FatalError(
+                                    "guest must specify terminal_id".to_string(),
+                                ))
+                                .unwrap_or_default();
                                 let _ = out_tx.send(err_msg).await;
                                 continue;
                             }
