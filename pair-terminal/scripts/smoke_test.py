@@ -39,7 +39,8 @@ def b64d(s: str) -> bytes:
 
 
 async def main() -> int:
-    bootstrap = b"smoke-bootstrap-key"  # 16 bytes (would be random in real use)
+    import os
+    bootstrap = os.urandom(16)  # 16 random bytes (would be the bootstrap key in real use)
     bootstrap_b64 = b64e(bootstrap)
 
     # --- Host connects ---
@@ -91,9 +92,16 @@ async def main() -> int:
     assert host_notice["type"] == "NewPeerConnected", host_notice
     print(f"[host] saw NewPeerConnected")
 
+    # Server also forwards a NumClients update right after the guest
+    # joins so the host can show the count. Drain it before continuing.
+    num_clients = json.loads(await host.recv())
+    assert num_clients["type"] == "NumClients", num_clients
+    assert num_clients["payload"] == 1, num_clients
+    print(f"[host] saw NumClients={num_clients['payload']}")
+
     # --- Simulate key rotation ---
-    new_output_key = b"new-output-key-12"  # 16 bytes
-    new_input_key = b"new-input-key-123"  # 16 bytes
+    new_output_key = os.urandom(16)  # exactly 16 bytes
+    new_input_key = os.urandom(16)  # exactly 16 bytes
     # Encrypt the new keys with the bootstrap (AES-GCM, counter 0 → nonce 0...)
     bootstrap_aes = AESGCM(bootstrap)
     iv_zero = b"\x00" * 12

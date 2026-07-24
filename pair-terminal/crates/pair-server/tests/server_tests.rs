@@ -1,6 +1,8 @@
 use pair_common::types::{MatchPreferences, PairMode, SkillLevel};
 use pair_server::matching::{calculate_match_score, skill_value, MatchQueue, MatchRequest};
+use pair_server::session::{ServerForwardMsg, SessionManager};
 use std::time::Instant;
+use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_match_queue_new() {
@@ -223,4 +225,75 @@ async fn test_match_queue_try_match_sufficient_users() {
             || (matched.user_a == "user2" && matched.user_b == "user1")
     );
     assert_eq!(matched.session_id.len(), 24);
+}
+
+
+// -----------------------------------------------------------------------
+// SessionManager tests
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_session_manager_host_registration() {
+    let mgr = SessionManager::new();
+    let (host_tx, _host_rx) = mpsc::channel(16);
+
+    let result = mgr.register_host("term-1".into(), "host-user".into(), host_tx).await;
+    assert!(result.is_ok(), "first host registration should succeed");
+}
+
+#[tokio::test]
+async fn test_session_manager_guest_join_notifies_host() {
+    // Regression test: a guest joining a session must reach the host via
+    // forward_to_host (so the host triggers key rotation). Previously
+    // the WS handler sent the NewPeerConnected message on the *guest's*
+    // outbound channel, so the host never saw it and rotation never ran.
+    let mgr = SessionManager::new();
+    let (host_tx, mut host_rx) = mpsc::channel(16);
+
+    mgr.register_host("term-1".into(), "host-user".into(), host_tx)
+        .await
+        .unwrap();
+    mgr.register_guest("term-1", "guest-1".into(), "guest-user".into())
+        .await
+        .unwrap();
+
+    // The WS handler is the one that calls forward_to_host for the
+    // GuestConnected + NumClients events after a guest joins. We
+    // simulate that here to confirm the path delivers to the host.
+    mgr.forward_to_host("term-1", ServerForwardMsg::GuestConnected)
+        .await
+        .unwrap();
+
+    let received = host_rx.recv().await.expect("host should get GuestConnected");
+    assert!(matches!(received, ServerForwardMsg::GuestConnected));
+}
+
+#[tokio::test]
+async fn test_session_manager_guest_join_increments_count() {
+    let mgr = SessionManager::new();
+    let (host_tx, _host_rx) = mpsc::channel(16);
+
+    mgr.register_host("term-1".into(), "host".into(), host_tx)
+        .await
+        .unwrap();
+    assert_eq!(mgr.guest_count("term-1").await, 0);
+
+    mgr.register_guest("term-1", "g-1".into(), "g-user".into())
+        .await
+        .unwrap();
+    assert_eq!(mgr.guest_count("term-1").await, 1);
+
+    mgr.register_guest("term-1", "g-2".into(), "g-user".into())
+        .await
+        .unwrap();
+    assert_eq!(mgr.guest_count("term-1").await, 2);
+}
+
+#[tokio::test]
+async fn test_session_manager_rejects_guest_for_unknown_terminal() {
+    let mgr = SessionManager::new();
+    let result = mgr
+        .register_guest("no-such-terminal", "g-1".into(), "g-user".into())
+        .await;
+    assert!(result.is_err(), "joining a non-existent terminal should fail");
 }

@@ -105,20 +105,29 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                 let _ = out_tx.send(ok_msg).await;
 
                                 let tid_clone = tid.clone();
-                                let sm = session_mgr.clone();
+                                let _sm = session_mgr.clone();
+                                let host_out_tx = out_tx.clone();
 
                                 tokio::spawn(async move {
                                     while let Some(forward_msg) = host_rx.recv().await {
                                         match forward_msg {
                                             ServerForwardMsg::KeyInput(data) => {
+                                                // Guest keystrokes must be delivered
+                                                // to the HOST's WebSocket, not
+                                                // broadcast back to the guests.
+                                                // (Previously the message went via
+                                                // `broadcast_output`, which means
+                                                // the same guest who typed the
+                                                // input would echo it back to
+                                                // themselves.)
                                                 let msg = serde_json::to_string(
                                                     &ServerMessage::KeyInput(KeyInputPayload {
                                                         data,
-                                                        encrypted: false,
+                                                        encrypted: true,
                                                     }),
                                                 )
                                                 .unwrap_or_default();
-                                                let _ = sm.broadcast_output(&tid_clone, msg).await;
+                                                let _ = host_out_tx.send(msg).await;
                                             }
                                             ServerForwardMsg::Resize { cols, rows } => {
                                                 let msg =
@@ -126,7 +135,7 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                                         ResizePayload { cols, rows },
                                                     ))
                                                     .unwrap_or_default();
-                                                let _ = sm.broadcast_output(&tid_clone, msg).await;
+                                                let _ = host_out_tx.send(msg).await;
                                             }
                                             ServerForwardMsg::Chat(text) => {
                                                 let msg = serde_json::to_string(
@@ -137,9 +146,23 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                                     }),
                                                 )
                                                 .unwrap_or_default();
-                                                let _ = sm.broadcast_output(&tid_clone, msg).await;
+                                                let _ = host_out_tx.send(msg).await;
                                             }
-                                            _ => {}
+                                            ServerForwardMsg::GuestConnected => {
+                                                let msg = serde_json::to_string(
+                                                    &ServerMessage::NewPeerConnected,
+                                                )
+                                                .unwrap_or_default();
+                                                let _ = host_out_tx.send(msg).await;
+                                            }
+                                            ServerForwardMsg::NumClients(n) => {
+                                                let msg = serde_json::to_string(
+                                                    &ServerMessage::NumClients(n),
+                                                )
+                                                .unwrap_or_default();
+                                                let _ = host_out_tx.send(msg).await;
+                                            }
+                                            ServerForwardMsg::SnapshotRequest => {}
                                         }
                                     }
                                 });
@@ -193,16 +216,24 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                 .unwrap_or_default();
                                 let _ = out_tx.send(ok_msg).await;
 
-                                let notify_msg =
-                                    serde_json::to_string(&ServerMessage::NewPeerConnected)
-                                        .unwrap_or_default();
-                                let _ = out_tx.send(notify_msg).await;
-
+                                // Notify the host that a new guest has joined so
+                                // it can rotate E2E keys. (Previously these two
+                                // messages were sent on the *guest's* out_tx,
+                                // meaning the host never saw them and the host's
+                                // `share.rs` loop would never trigger rotation.)
                                 let count = session_mgr.guest_count(tid).await;
-                                let count_msg =
-                                    serde_json::to_string(&ServerMessage::NumClients(count))
-                                        .unwrap_or_default();
-                                let _ = out_tx.send(count_msg).await;
+                                let _ = sm_for_notify
+                                    .forward_to_host(
+                                        &tid_for_host,
+                                        ServerForwardMsg::GuestConnected,
+                                    )
+                                    .await;
+                                let _ = sm_for_notify
+                                    .forward_to_host(
+                                        &tid_for_host,
+                                        ServerForwardMsg::NumClients(count),
+                                    )
+                                    .await;
 
                                 // Forward PTY output to guest
                                 let guest_out_tx = out_tx.clone();

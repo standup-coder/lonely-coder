@@ -17,6 +17,13 @@ pub enum ServerForwardMsg {
     Resize { cols: u16, rows: u16 },
     Chat(String),
     SnapshotRequest,
+    /// Tells the host a new guest has connected and prompts it to rotate
+    /// its E2E keys. Translated to `ServerMessage::NewPeerConnected` on
+    /// the wire by the host-receiver task in `ws_handler`.
+    GuestConnected,
+    /// Mirrors the current guest count to the host so it can update its
+    /// status bar. Translated to `ServerMessage::NumClients(u32)`.
+    NumClients(u32),
 }
 
 pub struct SessionManager {
