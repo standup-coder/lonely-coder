@@ -1,0 +1,1570 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+    <title>CodeMatch — Find your brainstorming squad</title>
+    <meta name="description" content="A Tinder-style matchmaking for 4-person brainstorming sessions. Each person brings their own LLM." />
+    <meta name="color-scheme" content="dark" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      /* ============================================================
+         Design tokens
+         ============================================================ */
+      :root {
+        --bg: #0a0a0c;
+        --bg-2: #101015;
+        --surface: #16161d;
+        --surface-2: #1d1d27;
+        --border: #2a2a35;
+        --border-2: #34343f;
+        --text: #f5f5f3;
+        --text-dim: #a4a4ad;
+        --text-faint: #6b6b76;
+        --accent: #f4a261;          /* warm coral — swipe right */
+        --accent-soft: rgba(244, 162, 97, 0.14);
+        --danger: #e76f51;          /* swipe left */
+        --danger-soft: rgba(231, 111, 81, 0.14);
+        --good: #8ec07c;            /* match green */
+        --info: #83c5be;            /* AI observation */
+        --radius: 18px;
+        --radius-sm: 10px;
+        --radius-lg: 28px;
+        --shadow-1: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 8px 24px rgba(0, 0, 0, 0.4);
+        --shadow-2: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 24px 64px rgba(0, 0, 0, 0.55);
+        --serif: "Fraunces", ui-serif, Georgia, serif;
+        --sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+        --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background: radial-gradient(1200px 800px at 50% -10%, #1a1424 0%, var(--bg) 60%) fixed;
+        color: var(--text);
+        font-family: var(--sans);
+        font-feature-settings: "ss01", "cv11";
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+        overflow-x: hidden;
+      }
+      button { font: inherit; color: inherit; cursor: pointer; }
+      input, textarea { font: inherit; color: inherit; }
+
+      .app {
+        max-width: 480px;
+        margin: 0 auto;
+        min-height: 100dvh;
+        padding: 24px 20px 96px;
+        position: relative;
+      }
+
+      /* ============================================================
+         Shared atoms
+         ============================================================ */
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 28px;
+      }
+      .brand {
+        font-family: var(--serif);
+        font-weight: 600;
+        font-size: 20px;
+        letter-spacing: -0.01em;
+        font-variation-settings: "opsz" 32;
+      }
+      .brand .dot {
+        display: inline-block;
+        width: 8px; height: 8px;
+        background: var(--accent);
+        border-radius: 50%;
+        margin-right: 8px;
+        vertical-align: middle;
+        box-shadow: 0 0 16px var(--accent);
+      }
+      .pill {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-dim);
+        padding: 6px 10px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--bg-2);
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 14px 20px;
+        border-radius: var(--radius);
+        border: 1px solid var(--border-2);
+        background: var(--surface);
+        color: var(--text);
+        font-weight: 500;
+        letter-spacing: -0.005em;
+        transition: transform 0.12s var(--ease), background 0.2s var(--ease), border-color 0.2s var(--ease);
+      }
+      .btn:hover { background: var(--surface-2); border-color: #40404d; }
+      .btn:active { transform: scale(0.98); }
+      .btn.primary {
+        background: var(--text);
+        color: var(--bg);
+        border-color: var(--text);
+        font-weight: 600;
+      }
+      .btn.primary:hover { background: #ffffff; }
+      .btn.ghost { background: transparent; border-color: var(--border); }
+
+      .label {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--text-faint);
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      /* ============================================================
+         Screen: landing
+         ============================================================ */
+      .hero {
+        padding: 40px 0 24px;
+        text-align: left;
+      }
+      .hero .eyebrow {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--accent);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        margin-bottom: 18px;
+      }
+      .hero h1 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 44px;
+        line-height: 1.05;
+        letter-spacing: -0.02em;
+        margin: 0 0 20px;
+        font-variation-settings: "opsz" 96;
+      }
+      .hero h1 em {
+        font-style: italic;
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .hero p.lede {
+        font-size: 16px;
+        line-height: 1.55;
+        color: var(--text-dim);
+        margin: 0 0 36px;
+        max-width: 38ch;
+      }
+      .stack {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: stretch;
+      }
+      .stack .btn { width: 100%; padding: 16px 20px; font-size: 15px; }
+
+      .preview {
+        margin-top: 36px;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-2);
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+        line-height: 1.7;
+      }
+      .preview .row { display: flex; gap: 8px; align-items: center; }
+      .preview .row + .row { margin-top: 6px; }
+      .preview .key { color: var(--text-faint); width: 56px; flex: none; }
+      .preview .v { color: var(--text); }
+
+      /* ============================================================
+         Screen: profile setup
+         ============================================================ */
+      .form h2 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 28px;
+        letter-spacing: -0.01em;
+        margin: 8px 0 6px;
+        font-variation-settings: "opsz" 60;
+      }
+      .form .sub {
+        color: var(--text-dim);
+        font-size: 14px;
+        margin: 0 0 28px;
+        line-height: 1.5;
+      }
+      .field { display: block; margin-bottom: 18px; }
+      .field .label { display: block; margin-bottom: 8px; }
+      .field input, .field textarea {
+        width: 100%;
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 14px 14px;
+        border-radius: var(--radius-sm);
+        outline: none;
+        transition: border-color 0.2s var(--ease);
+      }
+      .field input:focus, .field textarea:focus { border-color: var(--accent); }
+      .field textarea { min-height: 84px; resize: vertical; font-family: var(--sans); }
+      .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+      .chip {
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border-2);
+        background: var(--bg-2);
+        color: var(--text-dim);
+        font-size: 13px;
+        transition: all 0.15s var(--ease);
+      }
+      .chip.on {
+        background: var(--accent-soft);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+      .ai-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .ai-card {
+        text-align: left;
+        padding: 12px 14px;
+        border: 1px solid var(--border-2);
+        background: var(--bg-2);
+        border-radius: var(--radius-sm);
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        transition: all 0.15s var(--ease);
+      }
+      .ai-card .name { font-weight: 500; color: var(--text); font-size: 14px; }
+      .ai-card .meta { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+      .ai-card.on {
+        border-color: var(--info);
+        background: rgba(131, 197, 190, 0.08);
+      }
+      .ai-card.on .name { color: var(--info); }
+
+      /* ============================================================
+         Screen: swipe
+         ============================================================ */
+      .swipe-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+      .quota {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-dim);
+      }
+      .quota .bar {
+        width: 80px; height: 4px;
+        background: var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+      .quota .bar > span {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+        transition: width 0.3s var(--ease);
+      }
+
+      .deck {
+        position: relative;
+        height: 540px;
+        margin: 4px 0 28px;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+      }
+      .card {
+        position: absolute;
+        inset: 0;
+        background: var(--surface);
+        border: 1px solid var(--border-2);
+        border-radius: var(--radius-lg);
+        box-shadow: var(--shadow-2);
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        transform-origin: 50% 100%;
+        will-change: transform;
+        transition: transform 0.3s var(--ease), opacity 0.2s var(--ease);
+      }
+      .card.behind-1 { transform: scale(0.96) translateY(8px); opacity: 0.85; pointer-events: none; }
+      .card.behind-2 { transform: scale(0.92) translateY(16px); opacity: 0.6; pointer-events: none; }
+      .card.dragging { transition: none; }
+      .card.fly-left { transform: translate(-150%, 30px) rotate(-22deg); opacity: 0; }
+      .card.fly-right { transform: translate(150%, 30px) rotate(22deg); opacity: 0; }
+
+      .badge {
+        position: absolute;
+        top: 22px;
+        padding: 6px 12px;
+        border: 2px solid;
+        font-family: var(--mono);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        border-radius: 6px;
+        opacity: 0;
+        transform: rotate(-12deg);
+        pointer-events: none;
+      }
+      .badge.yes { right: 22px; color: var(--accent); border-color: var(--accent); }
+      .badge.no  { left: 22px;  color: var(--danger); border-color: var(--danger); transform: rotate(12deg); }
+      .card[data-tilt] .badge { opacity: 1; }
+
+      .avatar {
+        width: 64px; height: 64px;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        font-family: var(--serif);
+        font-weight: 600;
+        font-size: 24px;
+        color: var(--bg);
+        flex: none;
+        font-variation-settings: "opsz" 96;
+      }
+      .who { display: flex; align-items: center; gap: 14px; }
+      .who .name {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 22px;
+        letter-spacing: -0.01em;
+        font-variation-settings: "opsz" 48;
+      }
+      .who .handle {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--text-faint);
+        margin-top: 2px;
+      }
+
+      .card .topic {
+        font-family: var(--serif);
+        font-style: italic;
+        font-size: 20px;
+        line-height: 1.35;
+        color: var(--text);
+        border-left: 2px solid var(--accent);
+        padding-left: 14px;
+        font-variation-settings: "opsz" 36;
+      }
+      .card .topic .small {
+        display: block;
+        font-family: var(--mono);
+        font-style: normal;
+        font-size: 11px;
+        color: var(--text-faint);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 6px;
+      }
+
+      .meta-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+        margin-top: 4px;
+      }
+      .meta-row .item {
+        padding: 10px 12px;
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+      }
+      .meta-row .k {
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+      }
+      .meta-row .v {
+        margin-top: 2px;
+        font-size: 14px;
+        color: var(--text);
+      }
+
+      .skills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .skills .tag {
+        font-family: var(--mono);
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        color: var(--text-dim);
+      }
+
+      .ai-row {
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+        background: rgba(131, 197, 190, 0.06);
+        border: 1px solid rgba(131, 197, 190, 0.18);
+        border-radius: var(--radius-sm);
+      }
+      .ai-row .ai-icon {
+        width: 30px; height: 30px;
+        border-radius: 50%;
+        background: var(--info);
+        color: var(--bg);
+        display: grid; place-items: center;
+        font-weight: 700;
+        font-size: 13px;
+        font-family: var(--mono);
+      }
+      .ai-row .label-mini {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--info);
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      .ai-row .ai-name {
+        font-size: 14px;
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      .actions {
+        display: flex;
+        justify-content: center;
+        gap: 22px;
+        margin-top: 8px;
+      }
+      .circle {
+        width: 64px; height: 64px;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        border: 1px solid var(--border-2);
+        background: var(--surface);
+        transition: transform 0.15s var(--ease), border-color 0.2s var(--ease);
+        font-size: 22px;
+        color: var(--text);
+      }
+      .circle:hover { transform: scale(1.06); }
+      .circle.no { color: var(--danger); border-color: rgba(231, 111, 81, 0.4); }
+      .circle.no:hover { border-color: var(--danger); }
+      .circle.yes { color: var(--accent); border-color: rgba(244, 162, 97, 0.4); }
+      .circle.yes:hover { border-color: var(--accent); }
+
+      .empty {
+        text-align: center;
+        padding: 60px 20px;
+        color: var(--text-dim);
+      }
+      .empty h3 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 22px;
+        margin: 0 0 8px;
+        color: var(--text);
+      }
+      .empty p { font-size: 14px; margin: 0 0 20px; }
+
+      /* ============================================================
+         Screen: match celebration
+         ============================================================ */
+      .match {
+        text-align: center;
+        padding: 36px 0 8px;
+      }
+      .match .eyebrow {
+        font-family: var(--mono);
+        font-size: 12px;
+        color: var(--good);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        margin-bottom: 8px;
+      }
+      .match h2 {
+        font-family: var(--serif);
+        font-weight: 500;
+        font-size: 40px;
+        line-height: 1.05;
+        margin: 0 0 6px;
+        letter-spacing: -0.02em;
+        font-variation-settings: "opsz" 96;
+      }
+      .match h2 em { font-style: italic; color: var(--good); }
+      .match .sub {
+        color: var(--text-dim);
+        font-size: 14px;
+        margin: 0 auto 28px;
+        max-width: 30ch;
+        line-height: 1.5;
+      }
+      .squad {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+        margin: 0 0 28px;
+      }
+      .squad .seat {
+        padding: 14px 12px;
+        border: 1px solid var(--border-2);
+        background: var(--bg-2);
+        border-radius: var(--radius);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        text-align: left;
+      }
+      .squad .seat .who-name { font-weight: 500; font-size: 14px; }
+      .squad .seat .who-ai { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+      .squad .seat .av {
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        font-family: var(--serif);
+        font-weight: 600;
+        color: var(--bg);
+        font-size: 16px;
+      }
+
+      /* ============================================================
+         Screen: brainstorm room
+         ============================================================ */
+      .room-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .timer {
+        font-family: var(--mono);
+        font-size: 14px;
+        color: var(--text);
+        background: var(--bg-2);
+        border: 1px solid var(--border-2);
+        padding: 6px 10px;
+        border-radius: 8px;
+        display: flex; align-items: center; gap: 6px;
+      }
+      .timer .dot-live {
+        width: 6px; height: 6px;
+        background: var(--good);
+        border-radius: 50%;
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+      }
+
+      .seats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin-bottom: 14px;
+      }
+      .seat-mini {
+        text-align: center;
+        padding: 8px 4px;
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        position: relative;
+      }
+      .seat-mini.active { border-color: var(--accent); }
+      .seat-mini .av {
+        width: 34px; height: 34px;
+        border-radius: 50%;
+        display: grid; place-items: center;
+        font-family: var(--serif);
+        font-weight: 600;
+        font-size: 14px;
+        color: var(--bg);
+        margin: 0 auto 4px;
+      }
+      .seat-mini .nm { font-size: 11px; color: var(--text); font-weight: 500; }
+      .seat-mini .ai-badge {
+        position: absolute;
+        bottom: -4px; right: -4px;
+        width: 18px; height: 18px;
+        background: var(--info);
+        color: var(--bg);
+        font-size: 9px;
+        font-weight: 700;
+        font-family: var(--mono);
+        border-radius: 50%;
+        display: grid; place-items: center;
+        border: 2px solid var(--bg);
+      }
+
+      .room-body {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 10px;
+        height: 360px;
+      }
+      .panel {
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .panel-head {
+        padding: 10px 14px;
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .panel-head .live { color: var(--good); }
+      .panel-body {
+        flex: 1;
+        overflow-y: auto;
+        padding: 14px;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--text);
+      }
+      .panel-body::-webkit-scrollbar { width: 6px; }
+      .panel-body::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 3px; }
+
+      .canvas-line { margin-bottom: 4px; }
+      .canvas-line.h { font-family: var(--serif); font-weight: 600; font-size: 16px; margin-top: 14px; color: var(--text); }
+      .canvas-line.h:first-child { margin-top: 0; }
+      .canvas-line .check { color: var(--good); margin-right: 6px; }
+      .canvas-line .quest { color: var(--accent); margin-right: 6px; }
+      .canvas-line mark {
+        background: rgba(244, 162, 97, 0.16);
+        color: var(--text);
+        padding: 1px 4px;
+        border-radius: 4px;
+      }
+
+      .msg { margin-bottom: 12px; }
+      .msg .who {
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--text-faint);
+        margin-bottom: 2px;
+        display: flex; gap: 6px; align-items: center;
+      }
+      .msg .who .av-mini {
+        width: 14px; height: 14px;
+        border-radius: 50%;
+        display: inline-grid; place-items: center;
+        font-size: 8px;
+        font-family: var(--serif);
+        color: var(--bg);
+        font-weight: 700;
+      }
+      .msg .body { color: var(--text); font-size: 13px; }
+      .msg.ai { background: rgba(131, 197, 190, 0.06); border: 1px solid rgba(131, 197, 190, 0.18); padding: 10px; border-radius: 10px; }
+      .msg.ai .body { color: var(--text); }
+      .msg.ai .who { color: var(--info); }
+
+      .composer {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+      }
+      .composer input {
+        flex: 1;
+        padding: 12px 14px;
+        background: var(--bg-2);
+        border: 1px solid var(--border-2);
+        color: var(--text);
+        border-radius: 12px;
+        outline: none;
+      }
+      .composer input:focus { border-color: var(--accent); }
+      .composer .send {
+        padding: 12px 16px;
+        background: var(--text);
+        color: var(--bg);
+        border: 0;
+        border-radius: 12px;
+        font-weight: 600;
+      }
+      .composer .send[disabled] { opacity: 0.4; cursor: not-allowed; }
+
+      /* ============================================================
+         Screen transitions
+         ============================================================ */
+      .screen { animation: fade 0.36s var(--ease); }
+      @keyframes fade {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: none; }
+      }
+
+      /* small screens */
+      @media (max-width: 360px) {
+        .room-body { grid-template-columns: 1fr; height: auto; }
+        .panel { min-height: 220px; }
+        .seats { grid-template-columns: repeat(4, 1fr); }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app" class="app"></main>
+
+    <script>
+      /* ============================================================
+         Mock data — realistic, diverse, not "User 1 / User 2"
+         ============================================================ */
+      const DECK = [
+        {
+          id: "u_maya",
+          name: "Maya Iverson",
+          handle: "@maya.iv",
+          avatar: "M",
+          color: "#f4a261",
+          timezone: "Berlin · 09:14",
+          topic: "How do we evaluate LLM agents on real production code?",
+          topicTag: "Brainstorming now",
+          skills: ["Go", "Distributed", "Observability"],
+          level: "Staff Eng",
+          years: "9y",
+          ai: { name: "GPT-4o", model: "openai", mark: "G" },
+          bio: "Working on Kafka-to-Snowflake pipelines; curious about eval gaps when agents touch prod.",
+        },
+        {
+          id: "u_raj",
+          name: "Raj Venkatesh",
+          handle: "@raj.venk",
+          avatar: "R",
+          color: "#83c5be",
+          timezone: "Bangalore · 13:44",
+          topic: "Vector search for code — when does it actually beat grep?",
+          topicTag: "Brainstorming now",
+          skills: ["Python", "ML", "Search"],
+          level: "Senior Eng",
+          years: "6y",
+          ai: { name: "Gemini 2.5 Pro", model: "google", mark: "G" },
+          bio: "Built search at a code-hosting startup. Strong opinions on embeddings vs BM25.",
+        },
+        {
+          id: "u_lin",
+          name: "林夏",
+          handle: "@lin.xia",
+          avatar: "L",
+          color: "#e76f51",
+          timezone: "北京 · 20:44",
+          topic: "边缘节点上跑 LLM 推理 — 真的现实吗？",
+          topicTag: "正在头脑风暴",
+          skills: ["TypeScript", "Edge", "Infra"],
+          level: "Tech Lead",
+          years: "7y",
+          ai: { name: "DeepSeek V3", model: "deepseek", mark: "D" },
+          bio: "前 Cloudflare，现在写 dev tools。信奉 'small pieces, loosely joined'。",
+        },
+        {
+          id: "u_sam",
+          name: "Sam Okonkwo",
+          handle: "@sam.ok",
+          avatar: "S",
+          color: "#8ec07c",
+          timezone: "Lagos · 08:44",
+          topic: "Betting against token-burn — what would a 10×-cheaper coding agent look like?",
+          topicTag: "Brainstorming now",
+          skills: ["Rust", "Compilers", "Perf"],
+          level: "Principal Eng",
+          years: "12y",
+          ai: { name: "Claude Sonnet 4.5", model: "anthropic", mark: "C" },
+          bio: "Spent 4 years on a JIT. Now obsessed with inference economics.",
+        },
+        {
+          id: "u_ana",
+          name: "Ana Reis",
+          handle: "@ana.reis",
+          avatar: "A",
+          color: "#b48ead",
+          timezone: "Lisbon · 07:44",
+          topic: "Open-source maintainer burnout — what could tooling actually do?",
+          topicTag: "Brainstorming now",
+          skills: ["Ruby", "DevEx", "OSS"],
+          level: "Senior Eng",
+          years: "8y",
+          ai: { name: "GPT-4o mini", model: "openai", mark: "G" },
+          bio: "Maintains 3 mid-size libs. Wants maintainer-first triage tools.",
+        },
+        {
+          id: "u_keita",
+          name: "Keita Mori",
+          handle: "@keita.m",
+          avatar: "K",
+          color: "#d3869e",
+          timezone: "東京 · 21:44",
+          topic: "i18n is solved. l10n is not — what is everyone missing?",
+          topicTag: "Brainstorming now",
+          skills: ["TypeScript", "i18n", "Design"],
+          level: "Senior Eng",
+          years: "5y",
+          ai: { name: "Claude Sonnet 4.5", model: "anthropic", mark: "C" },
+          bio: "Built l10n for a 40-language product. Tired of copy-paste translation memory.",
+        },
+      ];
+
+      const AI_OPTIONS = [
+        { id: "claude", name: "Claude Sonnet 4.5", meta: "anthropic · byok" },
+        { id: "gpt4", name: "GPT-4o", meta: "openai · byok" },
+        { id: "gemini", name: "Gemini 2.5 Pro", meta: "google · byok" },
+        { id: "deepseek", name: "DeepSeek V3", meta: "deepseek · byok" },
+      ];
+
+      const SKILL_CHIPS = ["Rust", "Go", "Python", "TypeScript", "K8s", "Distributed", "AI/ML", "DevEx", "Edge", "iOS", "DB", "Compilers"];
+
+      const SQUAD_SIZE = 4;
+      const SESSION_SECONDS = 30 * 60; // 30 min
+
+      /* ============================================================
+         Backend API
+         ============================================================ */
+      // Base URL for the real backend. Override at the top of the page via
+      //   <meta name="api-base" content="http://your-host:port">
+      // for deployment. The default works against `codematch-server`
+      // running locally with `DEV_MODE=1`.
+      const API_BASE = (() => {
+        const m = document.querySelector('meta[name="api-base"]');
+        return m ? m.getAttribute("content") : "http://127.0.0.1:18081";
+      })();
+
+      async function api(path, opts = {}) {
+        const res = await fetch(API_BASE + path, {
+          credentials: "include",
+          ...opts,
+          headers: {
+            "Content-Type": "application/json",
+            ...(opts.headers || {}),
+          },
+        });
+        if (!res.ok) {
+          let detail = "";
+          try { detail = (await res.json()).error; } catch (_) {}
+          throw new Error(`${res.status} ${res.statusText}${detail ? " — " + detail : ""}`);
+        }
+        if (res.status === 204) return null;
+        return res.json();
+      }
+
+      const Api = {
+        status: () => api("/auth/status"),
+        devLogin: (handle) =>
+          fetch(API_BASE + "/auth/dev-login?as=" + encodeURIComponent(handle), {
+            method: "GET",
+            credentials: "include",
+          }),
+        logout: () => api("/auth/logout", { method: "POST" }),
+        me: () => api("/api/me"),
+        updateMe: (body) => api("/api/me", { method: "PATCH", body: JSON.stringify(body) }),
+        deck: () => api("/api/deck"),
+      };
+
+      // Map a backend UserPublic to the shape the swipe card expects.
+      // The seed users in the DB have data shaped like the DECK mocks;
+      // once the API is real, the user is just whatever GitHub returned.
+      function apiUserToCard(u) {
+        const initials = (u.display_name || u.username || "?").trim()[0] || "?".toUpperCase();
+        // Topic / brainstorm question. For seed users we stored it in `bio`
+        // (which the seed code set equal to the topic). For brand-new
+        // users we fall back to the typed `topic` field.
+        const topic = u.topic || u.bio || "Wants to brainstorm about something interesting.";
+        return {
+          id: "u_" + u.username,
+          name: u.display_name || u.username,
+          handle: "@" + u.username,
+          avatar: initials,
+          color: pickColor(u.username),
+          timezone: u.timezone || "—",
+          topic,
+          topicTag: "Brainstorming now",
+          skills: u.skills || [],
+          level: inferLevel(u),
+          years: inferYears(u),
+          ai: aiFor(u.primary_ai),
+        };
+      }
+      const COLORS = ["#f4a261", "#83c5be", "#e76f51", "#8ec07c", "#b48ead", "#d3869e", "#ebcb8b"];
+      function pickColor(seed) {
+        let h = 0;
+        for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+        return COLORS[h % COLORS.length];
+      }
+      function inferLevel(u) {
+        // No real seniority signal in the data yet; pick something plausible
+        // based on skill count so different users look different on the card.
+        const n = (u.skills || []).length;
+        if (n >= 4) return "Staff Eng";
+        if (n >= 3) return "Senior Eng";
+        if (n >= 2) return "Eng";
+        return "Junior Eng";
+      }
+      function inferYears(u) {
+        // Same idea: 4+ skills = "experienced", else proportional. This is
+        // honest about being a placeholder until the profile model grows.
+        const n = (u.skills || []).length;
+        return (5 + n * 2) + "y";
+      }
+      function aiFor(id) {
+        switch (id) {
+          case "claude":   return { name: "Claude Sonnet 4.5", model: "anthropic", mark: "C" };
+          case "gpt4":     return { name: "GPT-4o",            model: "openai",    mark: "G" };
+          case "gemini":   return { name: "Gemini 2.5 Pro",     model: "google",    mark: "G" };
+          case "deepseek": return { name: "DeepSeek V3",        model: "deepseek",  mark: "D" };
+          default:         return { name: "Unknown AI",         model: "unknown",   mark: "·" };
+        }
+      }
+
+      /* ============================================================
+         Tiny state machine
+         ============================================================ */
+      const state = {
+        screen: "landing",     // landing | profile | swipe | match | room
+        me: { name: "", skill: "Rust", topic: "", ai: "claude", skills: ["Rust", "K8s"], tz: "上海 · 21:40" },
+        deck: DECK.slice(),
+        swipes: 0,
+        quota: 12,
+        decisions: {},          // id -> "yes" | "no"
+        matchedSquad: null,    // filled when SQUAD_SIZE mutually yes
+        sessionStart: null,
+        timer: null,
+        timerRemaining: SESSION_SECONDS,
+        roomMessages: [],
+        activeSeat: 0,         // who's "typing" indicator
+      };
+
+      function $(sel, root = document) { return root.querySelector(sel); }
+      function el(tag, attrs = {}, ...children) {
+        const e = document.createElement(tag);
+        for (const [k, v] of Object.entries(attrs)) {
+          if (k === "class") e.className = v;
+          else if (k === "style" && typeof v === "object") Object.assign(e.style, v);
+          else if (k.startsWith("on") && typeof v === "function") e.addEventListener(k.slice(2), v);
+          else if (k === "html") e.innerHTML = v;
+          else if (v !== false && v != null) e.setAttribute(k, v);
+        }
+        for (const c of children.flat()) {
+          if (c == null || c === false) continue;
+          e.append(c.nodeType ? c : document.createTextNode(String(c)));
+        }
+        return e;
+      }
+
+      /* ============================================================
+         Render
+         ============================================================ */
+      const root = $("#app");
+
+      function setScreen(name) {
+        state.screen = name;
+        render();
+        if (name === "swipe") ensureDeck();
+      }
+
+      function render() {
+        root.innerHTML = "";
+        const screen = el("section", { class: "screen" });
+        if (state.screen === "landing") screen.append(viewLanding());
+        else if (state.screen === "profile") screen.append(viewProfile());
+        else if (state.screen === "swipe") screen.append(viewSwipe());
+        else if (state.screen === "match") screen.append(viewMatch());
+        else if (state.screen === "room") screen.append(viewRoom());
+        root.append(screen);
+      }
+
+      function viewLanding() {
+        const isDev = state.authMode === "dev";
+        const buttons = isDev
+          ? [
+              el("button", { class: "btn primary", onclick: () => doDevLogin("you") }, "Sign in (dev) as @you"),
+              el("button", { class: "btn ghost", onclick: () => doDevLogin("maya") }, "Sign in (dev) as @maya"),
+              el("button", { class: "btn ghost", onclick: () => setScreen("swipe") }, "Skip — show me the deck (offline)"),
+            ]
+          : [
+              el("button", { class: "btn primary", onclick: () => { window.location.href = API_BASE + "/auth/github"; } }, "Continue with GitHub"),
+              el("button", { class: "btn ghost", onclick: () => setScreen("swipe") }, "Skip — just show me the deck"),
+            ];
+
+        return el("div", {},
+          el("div", { class: "topbar" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("div", { class: "pill" }, isDev ? "v0.1 · DEV MODE" : "v0.1 · prototype"),
+          ),
+          el("div", { class: "hero" },
+            el("div", { class: "eyebrow" }, "lonely-coder · brainstorm matching"),
+            el("h1", { html: "Find a squad to <em>think</em> with." }),
+            el("p", { class: "lede" },
+              "Tinder-style matching for 4-person brainstorming sessions. ",
+              "Everyone brings their own LLM. 30 minutes, then done."
+            ),
+            state.apiError ? el("div", { class: "preview", style: { borderColor: "var(--danger)" } },
+              el("div", { class: "row" },
+                el("span", { class: "key", style: { color: "var(--danger)" } }, "api"),
+                el("span", { class: "v" }, "offline — " + state.apiError),
+              ),
+            ) : null,
+            el("div", { class: "stack" }, ...buttons),
+            el("div", { class: "preview" },
+              el("div", { class: "row" }, el("span", { class: "key" }, "squad"), el("span", { class: "v" }, "4 humans + 4 LLMs")),
+              el("div", { class: "row" }, el("span", { class: "key" }, "match"), el("span", { class: "v" }, "left / right swipe, mutual")),
+              el("div", { class: "row" }, el("span", { class: "key" }, "session"), el("span", { class: "v" }, "30 min · canvas + chat + AI")),
+              el("div", { class: "row" }, el("span", { class: "key" }, "ai"), el("span", { class: "v" }, "BYOK — bring your own key")),
+            ),
+          ),
+        );
+      }
+
+      async function doDevLogin(handle) {
+        try {
+          const r = await Api.devLogin(handle);
+          if (!r.ok) throw new Error("dev login: " + r.status);
+          // Re-fetch status and me, then drop into the deck.
+          const me = await Api.me();
+          state.authMode = "dev";
+          state.me.name = me.display_name || me.username;
+          state.me.skills = me.skills || [];
+          state.me.topic = me.topic || "";
+          state.me.ai = me.primary_ai || "claude";
+          state.me.tz = me.timezone || state.me.tz;
+          await loadDeck();
+          setScreen("swipe");
+        } catch (e) {
+          state.apiError = String(e.message || e);
+          render();
+        }
+      }
+
+      function viewProfile() {
+        return el("div", { class: "form" },
+          el("div", { class: "topbar" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("button", { class: "btn ghost", onclick: () => setScreen("swipe") }, "Back"),
+          ),
+          el("h2", {}, "Quick profile"),
+          el("p", { class: "sub" }, "Used for matching only — never sold, never trained on."),
+          el("div", { class: "field" },
+            el("span", { class: "label" }, "Display name"),
+            el("input", {
+              type: "text", value: state.me.name, placeholder: "e.g. 法喜",
+              oninput: (e) => { state.me.name = e.target.value; },
+            }),
+          ),
+          el("div", { class: "field" },
+            el("span", { class: "label" }, "What are you trying to brainstorm? (one sentence)"),
+            el("textarea", {
+              placeholder: "e.g. 我想搞个匹配程序员脑暴想法的小工具…",
+              oninput: (e) => { state.me.topic = e.target.value; },
+            }, state.me.topic),
+          ),
+          el("div", { class: "field" },
+            el("span", { class: "label" }, "Pick your skills (up to 4)"),
+            el("div", { class: "chips" },
+              ...SKILL_CHIPS.map(s =>
+                el("button", {
+                  class: "chip" + (state.me.skills.includes(s) ? " on" : ""),
+                  onclick: () => {
+                    if (state.me.skills.includes(s)) {
+                      state.me.skills = state.me.skills.filter(x => x !== s);
+                    } else if (state.me.skills.length < 4) {
+                      state.me.skills = [...state.me.skills, s];
+                    }
+                    render();
+                  },
+                }, s),
+              ),
+            ),
+          ),
+          el("div", { class: "field" },
+            el("span", { class: "label" }, "Which LLM are you bringing? (BYOK)"),
+            el("div", { class: "ai-grid" },
+              ...AI_OPTIONS.map(a =>
+                el("button", {
+                  class: "ai-card" + (state.me.ai === a.id ? " on" : ""),
+                  onclick: () => { state.me.ai = a.id; render(); },
+                },
+                  el("div", { class: "name" }, a.name),
+                  el("div", { class: "meta" }, a.meta),
+                ),
+              ),
+            ),
+          ),
+          state.profileError ? el("div", { class: "preview", style: { borderColor: "var(--danger)" } },
+            el("div", { class: "row" },
+              el("span", { class: "key", style: { color: "var(--danger)" } }, "save"),
+              el("span", { class: "v" }, state.profileError),
+            ),
+          ) : null,
+          el("div", { style: { marginTop: "28px" } },
+            el("button", {
+              class: "btn primary",
+              style: { width: "100%", padding: "16px" },
+              onclick: () => saveProfileAndEnter(),
+            }, state.profileSaving ? "Saving…" : "Enter the deck →"),
+          ),
+        );
+      }
+
+      async function saveProfileAndEnter() {
+        if (!state.me.name.trim()) {
+          state.me.name = "You";
+        }
+        state.profileSaving = true;
+        state.profileError = null;
+        render();
+        try {
+          await Api.updateMe({
+            display_name: state.me.name,
+            skills: state.me.skills,
+            primary_ai: state.me.ai,
+            topic: state.me.topic,
+            timezone: state.me.tz,
+          });
+          await loadDeck();
+          setScreen("swipe");
+        } catch (e) {
+          state.profileError = String(e.message || e);
+          state.profileSaving = false;
+          render();
+        }
+      }
+
+      async function loadDeck() {
+        try {
+          const users = await Api.deck();
+          state.deck = users.map(apiUserToCard);
+          state.swipes = 0;
+        } catch (e) {
+          state.apiError = String(e.message || e);
+          state.deck = DECK.slice(); // fall back to mocks so the UI still works
+        }
+      }
+
+      function viewSwipe() {
+        const card = state.deck[0];
+        const behind1 = state.deck[1];
+        const behind2 = state.deck[2];
+
+        const wrap = el("div", {},
+          el("div", { class: "swipe-header" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("div", { class: "quota" },
+              el("span", {}, `${state.swipes} / ${state.quota}`),
+              el("div", { class: "bar" },
+                el("span", { style: { width: ((state.swipes / state.quota) * 100) + "%" } }),
+              ),
+            ),
+          ),
+        );
+
+        if (!card) {
+          wrap.append(
+            el("div", { class: "empty" },
+              el("h3", {}, "That's everyone for now."),
+              el("p", {}, "New people join throughout the day. Come back in a bit, or check who liked you."),
+              el("button", { class: "btn", onclick: () => { state.deck = DECK.slice(); state.swipes = 0; render(); } }, "Reshuffle deck"),
+            ),
+          );
+          return wrap;
+        }
+
+        const deck = el("div", { class: "deck" });
+        if (behind2) deck.append(buildCard(behind2, "behind-2"));
+        if (behind1) deck.append(buildCard(behind1, "behind-1"));
+        deck.append(buildCard(card, "top", true));
+        wrap.append(deck);
+
+        wrap.append(
+          el("div", { class: "actions" },
+            el("button", {
+              class: "circle no", "aria-label": "Pass",
+              onclick: () => swipe("no"),
+            }, "✕"),
+            el("button", {
+              class: "circle yes", "aria-label": "Let's go",
+              onclick: () => swipe("yes"),
+            }, "✓"),
+          ),
+        );
+
+        return wrap;
+      }
+
+      function buildCard(person, layer, interactive = false) {
+        const cls = "card" + (layer === "behind-1" ? " behind-1" : layer === "behind-2" ? " behind-2" : "");
+        const card = el("div", { class: cls, "data-id": person.id },
+          el("div", { class: "badge yes" }, "YES"),
+          el("div", { class: "badge no" }, "PASS"),
+          el("div", { class: "who" },
+            el("div", { class: "avatar", style: { background: person.color } }, person.avatar),
+            el("div", {},
+              el("div", { class: "name" }, person.name),
+              el("div", { class: "handle" }, person.handle + " · " + person.timezone),
+            ),
+          ),
+          el("div", { class: "topic" },
+            el("span", { class: "small" }, person.topicTag),
+            "“" + person.topic + "”",
+          ),
+          el("div", { class: "meta-row" },
+            el("div", { class: "item" },
+              el("div", { class: "k" }, "Level"),
+              el("div", { class: "v" }, person.level),
+            ),
+            el("div", { class: "item" },
+              el("div", { class: "k" }, "Years"),
+              el("div", { class: "v" }, person.years),
+            ),
+          ),
+          el("div", { class: "skills" },
+            ...person.skills.map(s => el("span", { class: "tag" }, s)),
+          ),
+          el("div", { class: "ai-row" },
+            el("div", { class: "ai-icon" }, person.ai.mark),
+            el("div", {},
+              el("div", { class: "label-mini" }, "Bringing"),
+              el("div", { class: "ai-name" }, person.ai.name),
+            ),
+          ),
+        );
+
+        if (interactive) attachSwipeGesture(card, person);
+        return card;
+      }
+
+      function attachSwipeGesture(card, person) {
+        let startX = 0, startY = 0, dx = 0, dy = 0, dragging = false;
+        const onStart = (x, y) => {
+          if (card.classList.contains("fly-left") || card.classList.contains("fly-right")) return;
+          dragging = true;
+          startX = x; startY = y;
+          card.classList.add("dragging");
+        };
+        const onMove = (x, y) => {
+          if (!dragging) return;
+          dx = x - startX; dy = y - startY;
+          const rot = dx * 0.06;
+          card.style.transform = `translate(${dx}px, ${dy * 0.2}px) rotate(${rot}deg)`;
+          card.dataset.tilt = dx > 30 ? "yes" : dx < -30 ? "no" : "";
+        };
+        const onEnd = () => {
+          if (!dragging) return;
+          dragging = false;
+          card.classList.remove("dragging");
+          if (dx > 110) { flyOff("yes"); }
+          else if (dx < -110) { flyOff("no"); }
+          else {
+            card.style.transform = "";
+            delete card.dataset.tilt;
+          }
+          dx = 0; dy = 0;
+        };
+        const flyOff = (dir) => {
+          card.classList.add(dir === "yes" ? "fly-right" : "fly-left");
+          setTimeout(() => swipe(dir), 220);
+        };
+
+        card.addEventListener("mousedown", (e) => onStart(e.clientX, e.clientY));
+        card.addEventListener("touchstart", (e) => onStart(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+        window.addEventListener("mousemove", (e) => onMove(e.clientX, e.clientY));
+        window.addEventListener("touchmove", (e) => onMove(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+        window.addEventListener("mouseup", onEnd);
+        window.addEventListener("touchend", onEnd);
+      }
+
+      function swipe(decision) {
+        const card = state.deck[0];
+        if (!card) return;
+        state.decisions[card.id] = decision;
+        state.swipes += 1;
+        state.deck = state.deck.slice(1);
+
+        // After each yes, see if we have enough for a squad
+        if (decision === "yes") {
+          const yesSet = new Set(Object.entries(state.decisions).filter(([_, v]) => v === "yes").map(([k]) => k));
+          if (yesSet.size >= SQUAD_SIZE - 1) {
+            // Build a 4-person squad: me + first N right-swiped
+            const squad = [
+              { id: "u_me", name: state.me.name || "You", handle: "@you", avatar: (state.me.name || "Y")[0].toUpperCase(), color: "#f4a261", ai: AI_OPTIONS.find(a => a.id === state.me.ai) },
+              ...Array.from(yesSet).slice(0, SQUAD_SIZE - 1).map(id => DECK.find(d => d.id === id)),
+            ];
+            state.matchedSquad = squad;
+            setScreen("match");
+            return;
+          }
+        }
+
+        render();
+      }
+
+      function ensureDeck() {
+        if (state.deck.length === 0) state.deck = DECK.slice();
+      }
+
+      /* ============================================================
+         Match
+         ============================================================ */
+      function viewMatch() {
+        const squad = state.matchedSquad;
+        return el("div", { class: "match screen" },
+          el("div", { class: "eyebrow" }, "Mutual yes · 4 / 4"),
+          el("h2", { html: "It's a <em>match</em>." }),
+          el("p", { class: "sub" },
+            "All 4 of you swiped right. The room opens in 10 seconds — your AIs are already warming up."
+          ),
+          el("div", { class: "squad" },
+            ...squad.map(p =>
+              el("div", { class: "seat" },
+                el("div", { class: "av", style: { background: p.color } }, p.avatar),
+                el("div", {},
+                  el("div", { class: "who-name" }, p.name),
+                  el("div", { class: "who-ai" }, (p.ai && p.ai.name) || "—"),
+                ),
+              ),
+            ),
+          ),
+          el("button", {
+            class: "btn primary",
+            style: { width: "100%", padding: "16px" },
+            onclick: () => enterRoom(),
+          }, "Open the room →"),
+          el("button", {
+            class: "btn ghost",
+            style: { width: "100%", padding: "12px", marginTop: "10px" },
+            onclick: () => {
+              state.matchedSquad = null;
+              state.deck = DECK.slice();
+              state.swipes = 0;
+              state.decisions = {};
+              setScreen("swipe");
+            },
+          }, "Skip — keep swiping"),
+        );
+      }
+
+      /* ============================================================
+         Room
+         ============================================================ */
+      function enterRoom() {
+        setScreen("room");
+        state.sessionStart = Date.now();
+        state.timerRemaining = SESSION_SECONDS;
+        if (state.timer) clearInterval(state.timer);
+        state.timer = setInterval(tickTimer, 1000);
+        seedRoomConversation();
+      }
+
+      function tickTimer() {
+        state.timerRemaining = Math.max(0, state.timerRemaining - 1);
+        const t = $("#timer-value");
+        if (t) t.textContent = formatTime(state.timerRemaining);
+        if (state.timerRemaining === 0) {
+          clearInterval(state.timer);
+        }
+      }
+      function formatTime(sec) {
+        const m = Math.floor(sec / 60), s = sec % 60;
+        return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+      }
+
+      function seedRoomConversation() {
+        const me = state.me.name || "You";
+        const meSkill = state.me.skills[0] || "Rust";
+        state.roomMessages = [
+          { kind: "user", who: "Maya", avColor: "#f4a261", av: "M",
+            body: "我比较担心 cold start — 前 10 个用户从哪来？" },
+          { kind: "ai", ai: "Claude (Sam's)", avColor: "#8ec07c", mark: "C",
+            body: "💡 建议：先聚焦 K8s / 边缘计算 圈层，他们有共同语言，撮起来像'老友重逢'不像'相亲'。" },
+          { kind: "user", who: "Sam", avColor: "#8ec07c", av: "S",
+            body: "BYOK 摩擦会筛掉 60% 的人。要不要做个'先用 free tier 试一桌'的入口？" },
+          { kind: "user", who: me, avColor: "#f4a261", av: (me[0] || "Y").toUpperCase(),
+            body: `我用 ${meSkill}。我可以挂个 demo repo 当 shared canvas，先 5 分钟动起来再说。` },
+          { kind: "ai", ai: "Gemini (Raj's)", avColor: "#83c5be", mark: "G",
+            body: "💡 在 canvas 上开一个 'Wedge' 区块，让大家先各写 1 句自己的尖刀假设。" },
+          { kind: "user", who: "Raj", avColor: "#83c5be", av: "R",
+            body: "好。那 timer 给我 12 分钟，12 分钟后投票哪条最值得 24 分钟深挖。" },
+        ];
+      }
+
+      function viewRoom() {
+        const squad = state.matchedSquad || [];
+        const meIdx = 0; // we are first
+        return el("div", { class: "screen" },
+          el("div", { class: "room-header" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("div", { class: "timer" },
+              el("span", { class: "dot-live" }),
+              el("span", { id: "timer-value" }, formatTime(state.timerRemaining)),
+              el("span", { style: { color: "var(--text-faint)" } }, " / 30:00"),
+            ),
+          ),
+          el("div", { class: "seats" },
+            ...squad.map((p, i) =>
+              el("div", { class: "seat-mini" + (i === state.activeSeat ? " active" : "") },
+                el("div", { class: "av", style: { background: p.color || "#888" } }, p.avatar),
+                el("div", { class: "nm" }, (p.name || "—").split(" ")[0]),
+                el("div", { class: "ai-badge" }, (p.ai && p.ai.mark) || "·"),
+              ),
+            ),
+          ),
+          el("div", { class: "room-body" },
+            el("div", { class: "panel" },
+              el("div", { class: "panel-head" },
+                el("span", {}, "Shared canvas"),
+                el("span", { class: "live" }, "● live"),
+              ),
+              el("div", { class: "panel-body" },
+                el("div", { class: "canvas-line h" }, "Wedge — 12 min"),
+                el("div", { class: "canvas-line" },
+                  el("span", { class: "quest" }, "?"),
+                  "Who are the first 10 people who'd try CodeMatch, and how do we find them this week?",
+                ),
+                el("div", { class: "canvas-line h" }, "Candidates"),
+                el("div", { class: "canvas-line" },
+                  el("span", { class: "check" }, "✓"),
+                  "KOL 路线 — 20 个技术网红先用起来",
+                ),
+                el("div", { class: "canvas-line" },
+                  el("span", { class: "check" }, "✓"),
+                  "垂直场景 — 先做 K8s / 边缘计算",
+                ),
+                el("div", { class: "canvas-line" },
+                  el("span", { class: "quest" }, "?"),
+                  "BYOK 摩擦 — 是不是要做一个 'free trial 桌'",
+                ),
+                el("div", { class: "canvas-line h" }, "Open questions"),
+                el("div", { class: "canvas-line" },
+                  "AI 在房间里 <mark>参与</mark> 还是 <mark>旁观</mark>？",
+                ),
+              ),
+            ),
+            el("div", { class: "panel" },
+              el("div", { class: "panel-head" },
+                el("span", {}, "Discussion"),
+                el("span", {}, `${state.roomMessages.length} msgs`),
+              ),
+              el("div", { class: "panel-body", id: "chat-body" },
+                ...state.roomMessages.map(m =>
+                  el("div", { class: "msg" + (m.kind === "ai" ? " ai" : "") },
+                    el("div", { class: "who" },
+                      el("span", {
+                        class: "av-mini",
+                        style: { background: m.avColor || "#888" },
+                      }, m.av || m.mark),
+                      m.kind === "ai" ? `💡 ${m.ai}` : m.who,
+                    ),
+                    el("div", { class: "body" }, m.body),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          el("div", { class: "composer" },
+            el("input", {
+              type: "text",
+              id: "composer-input",
+              placeholder: "Say something to the squad…",
+              onkeydown: (e) => { if (e.key === "Enter") sendMessage(); },
+            }),
+            el("button", { class: "send", onclick: () => sendMessage() }, "Send"),
+          ),
+        );
+      }
+
+      function sendMessage() {
+        const input = $("#composer-input");
+        if (!input || !input.value.trim()) return;
+        const me = state.me.name || "You";
+        const av = (me[0] || "Y").toUpperCase();
+        state.roomMessages.push({
+          kind: "user", who: me, avColor: "#f4a261", av,
+          body: input.value.trim(),
+        });
+        input.value = "";
+        // re-render messages only (avoid losing focus)
+        const body = $("#chat-body");
+        if (body) {
+          body.innerHTML = "";
+          state.roomMessages.forEach(m => {
+            const div = el("div", { class: "msg" + (m.kind === "ai" ? " ai" : "") },
+              el("div", { class: "who" },
+                el("span", { class: "av-mini", style: { background: m.avColor || "#888" } }, m.av || m.mark),
+                m.kind === "ai" ? `💡 ${m.ai}` : m.who,
+              ),
+              el("div", { class: "body" }, m.body),
+            );
+            body.append(div);
+          });
+          body.scrollTop = body.scrollHeight;
+        }
+      }
+
+      /* ============================================================
+         Boot
+         ============================================================ */
+      // Expose for headless screenshot harnesses; harmless in production.
+      window.__app = { state, setScreen, swipe, render, seedRoomConversation };
+
+      // Resolve the starting screen based on auth + profile status.
+      (async function boot() {
+        try {
+          const status = await Api.status();
+          state.authMode = status.mode;
+          if (status.authenticated && status.user) {
+            // Pre-fill the me profile from the API and skip the landing.
+            const me = await Api.me();
+            state.me.name = me.display_name || me.username;
+            state.me.skills = me.skills || [];
+            state.me.topic = me.topic || "";
+            state.me.ai = me.primary_ai || "claude";
+            state.me.tz = me.timezone || state.me.tz;
+            setScreen("swipe");
+            return;
+          }
+        } catch (e) {
+          // If the backend is unreachable we still want the prototype to
+          // render — fall through to the landing with a small banner.
+          state.apiError = String(e.message || e);
+        }
+        render();
+      })();
+    </script>
+  </body>
+</html>

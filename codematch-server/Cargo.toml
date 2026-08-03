@@ -1,0 +1,54 @@
+[package]
+name = "codematch-server"
+version = "0.1.0"
+edition = "2021"
+description = "Backend for CodeMatch — 4-person brainstorm matching with BYOK LLM agents"
+license = "MIT"
+
+[[bin]]
+name = "codematch-server"
+path = "src/main.rs"
+
+[dependencies]
+# Web framework — same choice as pair-terminal for muscle-memory consistency
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "macros"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTTP client for GitHub OAuth
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# Crypto / sessions
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+
+# Error handling / utilities
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Config
+dotenvy = "0.15"
+
+# Async helpers
+async-trait = "0.1"
+
+# URL building for OAuth
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util", "macros"] }

@@ -44,3 +44,9 @@ venv/
 
 # Local agent / IDE config
 .claude/
+
+# CodeMatch dev artifacts
+codematch-server/codematch.db
+codematch-server/codematch.db-*
+codematch-server/target/
+codematch-prototype/_shot.html
