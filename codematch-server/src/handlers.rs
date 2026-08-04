@@ -169,6 +169,10 @@ pub async fn auth_logout(
 
 #[derive(Deserialize)]
 pub struct DevLoginQuery {
+    // `as` is a Rust keyword; serde's default field name is the Rust name
+    // (with the trailing underscore). We rename on the wire so the URL
+    // stays `?as=foo` — matching what the prototype and curl tests do.
+    #[serde(rename = "as")]
     pub as_: Option<String>,
 }
 
@@ -179,10 +183,13 @@ pub async fn auth_dev_login(
     if !state.config.dev_mode {
         return Err(AppError::BadRequest("dev login is disabled".into()));
     }
-    let handle = q
-        .as_
-        .unwrap_or_else(|| "you".to_string())
-        .to_ascii_lowercase();
+    // Refuse to log in as "you" implicitly — that handle reads as a
+    // placeholder. If you want a throwaway user, pass `?as=guest` or
+    // similar; otherwise we require the caller to be explicit.
+    let handle = match q.as_ {
+        Some(h) if !h.is_empty() => h.to_ascii_lowercase(),
+        _ => return Err(AppError::BadRequest("missing ?as=HANDLE".into())),
+    };
 
     // Find the seed user, or invent a brand-new one.
     let gh = if let Some(user) = db::fetch_by_username(&state.pool, &handle).await? {
