@@ -76,15 +76,38 @@ developers pair up) but ships as a focused terminal CLI. The
   - Replaced root README with a current-state-first version
   - CI now passes: `cargo fmt --check`, `cargo clippy -D warnings`,
     `cargo build --all`, `cargo test --all` (31/31).
+- **2026-08-04 → 2026-08-05** — `codematch-server/` and
+  `codematch-prototype/` added. A second product lane for the repo,
+  this time a browser-based brainstorm-matching tool (4-person squad,
+  mutual-yes lobby, WebSocket room, AI proxy). The terminal
+  pair-programming tool above stays as the canonical `pair-terminal/`
+  workspace. W2 status:
+  - **W2a matching + lobby** — queue, 4-person lobby auto-formation,
+    mutual-yes vote → room create, all on real SQLite + axum.
+  - **W2b canvas + WebSocket** — in-process broadcast bus, backlog
+    replay, live fan-out.
+  - **W2d AI proxy** — OpenAI-compatible chat completion with
+    observer-role system prompt; `ai.thinking` / `ai.done` events
+    fan out via the same bus.
+  - 22 tests green; E2E browser walkthrough (Playwright + Chromium)
+    verifies matching → lobby → room → chat-echo end-to-end with
+    screenshots in `/tmp/e2e-0{1..4}-*.png`.
+  - **W2c voice** — explicitly deferred; not in W2 scope.
 
 ---
 
 ## Where things stand now
 
-- The repository is a Rust project with two historical layers attached
-  (`archive/`, `analysis-report.md`, `ideas.md`).
-- The active surface area is small: `pair-terminal/`, `.github/`,
-  `README.md`, `HISTORY.md`, `LICENSE`.
-- The PHP layers are kept for reference; they should not be deployed
-  or extended. Anyone looking for the social platform idea should
-  treat `analysis-report.md` as the warning label.
+- Two parallel product lanes live in the repo:
+  `pair-terminal/` (the terminal pair-programming tool, W3-ish
+  features shipped) and `codematch-server/` + `codematch-prototype/`
+  (the brainstorm-matching product, currently mid-W2).
+- The active surface area is small: `pair-terminal/`, `codematch-server/`,
+  `codematch-prototype/`, `product-design/`, `.github/`, `README.md`,
+  `HISTORY.md`, `LICENSE`.
+- The historical layers (`archive/`, `analysis-report.md`, `ideas.md`,
+  `doc/`) are kept for reference only and should not be deployed or
+  extended. Anyone reviving the social-platform idea should treat
+  `analysis-report.md` as the warning label — and should look at
+  `codematch-*` instead, which is the modern, well-architected
+  reinterpretation of the same core idea.

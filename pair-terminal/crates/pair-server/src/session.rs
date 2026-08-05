@@ -14,7 +14,10 @@ pub struct TerminalSession {
 #[derive(Debug, Clone)]
 pub enum ServerForwardMsg {
     KeyInput(String),
-    Resize { cols: u16, rows: u16 },
+    Resize {
+        cols: u16,
+        rows: u16,
+    },
     Chat(String),
     SnapshotRequest,
     /// Tells the host a new guest has connected and prompts it to rotate

@@ -3,13 +3,24 @@
 The backend for [CodeMatch](../codematch-prototype/) — 4-person
 brainstorm matching with BYOK LLM agents.
 
-This is **W1** of the product: real auth, real users, real profile CRUD,
-real deck API. AI agent integration, voice, and the room itself are
-later weeks (W2–W3).
+This server is **W1 + W2 + W2d** of the product:
+
+- **W1**: real auth, real users, real profile CRUD, real deck API
+- **W2a**: real matching engine + 4-person lobby + mutual-yes voting
+- **W2b**: real-time room via WebSocket (canvas + chat fan-out)
+- **W2d**: AI proxy — every user's AI is in the room, responding to context
+
+**Deferred to W3** (not in this build):
+
+- Per-user BYOK API key storage (currently one server-wide key)
+- Voice channel (WebRTC)
+- AI-to-AI conversation (AIs can only nudge, not chat with each other)
 
 ---
 
-## What this server does
+## Endpoints
+
+### Health / auth (W1)
 
 | Endpoint | Method | Purpose | Auth |
 |---|---|---|---|
@@ -22,6 +33,40 @@ later weeks (W2–W3).
 | `/api/me` | GET | Current user's profile | session |
 | `/api/me` | PATCH | Update display name, skills, topic, AI choice, timezone | session |
 | `/api/deck` | GET | Other users (currently ordered by last-active) | session |
+
+### Matching + lobby (W2a)
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `POST /api/match/queue` | Enters the match queue with the given preferences. |
+| `DELETE /api/match/queue` | Leaves the queue. |
+| `GET /api/match/status` | Returns `{in_queue, queue_size, waited_seconds, pending_lobby_id}`. |
+| `GET /api/lobbies/:id` | Lobby view (id, topic, status, seats[], room_id). |
+| `POST /api/lobbies/:id/join` | Adds the caller as a guest seat. |
+| `POST /api/lobbies/:id/leave` | Removes the caller's seat. |
+| `POST /api/lobbies/:id/vote` | Body `{vote: "accept" \| "skip"}`. May finalise the lobby. |
+
+Lobby status transitions: `negotiating` (4 seats, voting) → `matched`
+(all 4 accepted → room created) or `closed` (anyone skipped, survivors
+re-queued).
+
+### Room (W2b)
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `GET /api/rooms/:id/events` | Last ~500 events (replay on join). |
+| `GET /api/rooms/:id/ws` | WebSocket upgrade. Receives backlog, then live fan-out. |
+| `POST /api/rooms/:id/ai` | Body `{}`. Asks the user's AI for an observation. |
+
+WebSocket message types: `chat`, `canvas.put`, `ai.thinking`, `ai.done`,
+`system.peer_joined`, `system.peer_left`. Payload is JSON; the client
+sends `{kind, payload}` and the server broadcasts the same shape.
+
+### Test-only
+
+| Endpoint | Method | Purpose |
+|---|---|---|
+| `POST /api/_test/sweep` | Runs the matching engine once. Gated on `DEV_MODE=1`. |
 
 Sessions are 32-byte random tokens in an HTTP-only `SameSite=Lax` cookie.
 Dev-mode login creates a user in the DB on first use; subsequent calls
@@ -156,24 +201,44 @@ src/
 
 ---
 
-## What's *not* in W1
+## What's *not* in this build
 
-These are deliberate cuts so W1 stays shippable in a focused session:
+These are deliberate cuts so W1+W2 stays shippable in a focused session:
 
-- **AI API keys / BYOK storage** — W3
-- **Real matching algorithm** (skill overlap, timezone, complementary
-  skills) — the current `deck_for` is "everyone else, ordered by
-  last-active"
-- **The room** — the prototype's brainstorm room is still client-side
-  mock
-- **Lobby / 4-way mutual-yes** — the prototype triggers match on the
-  first 3 yes-swipes; the real flow needs server-side session state
-- **Voice / WebRTC** — W2
+- **Voice / WebRTC** — W3
+- **Per-user BYOK AI key storage** — currently one server-wide
+  `OPENAI_API_KEY`. The room-endpoint signature is already per-user so
+  the swap-in is small
+- **AI-to-AI conversation** — AIs in the room can nudge the human
+  thread, but they don't talk to each other
 - **Recordings** — the asciinema path is in the prototype but not wired
   to a real backend
+- **Streaming AI responses** — we wait for the full model reply before
+  broadcasting `ai.done`. Switching to SSE on the upstream is a
+  one-evening change
+- **Rate limiting / abuse** — out of scope for the prototype
 
-The endpoints above are stable — they won't be renamed or moved in W2/W3
+The endpoints above are stable — they won't be renamed or moved in W3
 without a deprecation period.
+
+---
+
+## Environment variables
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `HOST` | `127.0.0.1` | Bind host. `DEV_MODE=1` refuses non-loopback. |
+| `PORT` | `8080` | Bind port. |
+| `DATABASE_URL` | `sqlite://codematch.db` | SQLite path. Use `?mode=rwc` if the file doesn't exist yet. |
+| `DEV_MODE` | `0` | When `1`, enables `/auth/dev-login` + the `/api/_test/sweep` test hook. |
+| `GITHUB_CLIENT_ID` | — | OAuth App client id. Required unless `DEV_MODE=1`. |
+| `GITHUB_CLIENT_SECRET` | — | OAuth App client secret. Required unless `DEV_MODE=1`. |
+| `PUBLIC_URL` | `http://$HOST:$PORT` | Public URL of the running app, used to build the OAuth callback. |
+| `SESSION_TTL_HOURS` | `720` (30d) | Session cookie lifetime. |
+| `SESSION_COOKIE_NAME` | `cm_session` | Cookie name. |
+| `OPENAI_API_KEY` | — | W2d: enables the room AI proxy. OpenAI-compatible. |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Override for compatible APIs (DeepSeek, local llama, etc.). |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Model name to send. |
 
 ---
 

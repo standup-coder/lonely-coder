@@ -227,7 +227,6 @@ async fn test_match_queue_try_match_sufficient_users() {
     assert_eq!(matched.session_id.len(), 24);
 }
 
-
 // -----------------------------------------------------------------------
 // SessionManager tests
 // -----------------------------------------------------------------------
@@ -237,7 +236,9 @@ async fn test_session_manager_host_registration() {
     let mgr = SessionManager::new();
     let (host_tx, _host_rx) = mpsc::channel(16);
 
-    let result = mgr.register_host("term-1".into(), "host-user".into(), host_tx).await;
+    let result = mgr
+        .register_host("term-1".into(), "host-user".into(), host_tx)
+        .await;
     assert!(result.is_ok(), "first host registration should succeed");
 }
 
@@ -264,7 +265,10 @@ async fn test_session_manager_guest_join_notifies_host() {
         .await
         .unwrap();
 
-    let received = host_rx.recv().await.expect("host should get GuestConnected");
+    let received = host_rx
+        .recv()
+        .await
+        .expect("host should get GuestConnected");
     assert!(matches!(received, ServerForwardMsg::GuestConnected));
 }
 
@@ -295,5 +299,8 @@ async fn test_session_manager_rejects_guest_for_unknown_terminal() {
     let result = mgr
         .register_guest("no-such-terminal", "g-1".into(), "g-user".into())
         .await;
-    assert!(result.is_err(), "joining a non-existent terminal should fail");
+    assert!(
+        result.is_err(),
+        "joining a non-existent terminal should fail"
+    );
 }

@@ -96,6 +96,23 @@ pub struct GitHubUser {
     pub bio: Option<String>,
 }
 
+/// What the client sends to enter the match queue. Carried as JSON in
+/// the request body and stored on the `match_queue` row so the
+/// matching engine can score without re-fetching the user.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MatchPreferences {
+    #[serde(default)]
+    pub languages: Vec<String>,
+    #[serde(default)]
+    pub skill_level: Option<String>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub topic: Option<String>,
+    #[serde(default)]
+    pub timezone: Option<String>,
+}
+
 #[allow(dead_code)]
 pub struct Session {
     pub token: String,

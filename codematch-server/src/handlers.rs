@@ -5,16 +5,24 @@ use crate::auth::{
     build_session_cookie, clear_session_cookie, create_session, delete_session,
     exchange_code_for_token, fetch_github_user, generate_oauth_state, AuthUser, AppState,
 };
+use crate::ai::{self, AiConfig};
 use crate::db;
 use crate::error::{AppError, AppResult};
-use crate::models::{UpdateProfileRequest, UserPublic};
+use crate::matching;
+use crate::models::{MatchPreferences, UpdateProfileRequest, UserPublic};
+use crate::room::{self, RoomBus, RoomEvent};
 use axum::{
-    extract::{Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
     http::{header::SET_COOKIE, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Redirect, Response},
-    Json,
+    Extension, Json,
 };
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 // =====================================================================
 // Health
@@ -277,4 +285,279 @@ pub async fn api_deck(
 ) -> AppResult<Json<Vec<UserPublic>>> {
     let users = db::deck_for(&state.pool, user.id).await?;
     Ok(Json(users.into_iter().map(UserPublic::from).collect()))
+}
+
+// =====================================================================
+// W2a — Match queue + lobby
+// =====================================================================
+
+#[derive(Deserialize)]
+pub struct QueueRequest {
+    #[serde(default)]
+    pub preferences: Option<MatchPreferences>,
+}
+
+pub async fn api_match_queue(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Json(req): Json<QueueRequest>,
+) -> AppResult<Json<matching::MatchStatus>> {
+    let prefs = req.preferences.unwrap_or_default();
+    matching::enqueue(&state.pool, user.id, &prefs).await?;
+    matching::status_for(&state.pool, user.id)
+        .await
+        .map(Json)
+}
+
+pub async fn api_match_dequeue(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<StatusCode> {
+    matching::dequeue(&state.pool, user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn api_match_status(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<matching::MatchStatus>> {
+    matching::status_for(&state.pool, user.id).await.map(Json)
+}
+
+pub async fn api_lobby_get(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<matching::LobbyView>> {
+    matching::lobby_view(&state.pool, &id)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound)
+}
+
+/// Join the lobby by id. Used by the user-flow when the queue engine
+/// has already created a lobby for them and the client navigates
+/// directly to /lobby/:id. (Currently the match engine's auto-form
+/// also writes the user as a seat, so this is mostly a no-op — kept
+/// for explicit "share a lobby link" UX.)
+pub async fn api_lobby_join(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<matching::LobbyView>> {
+    sqlx::query(
+        "INSERT OR IGNORE INTO lobby_seats (lobby_id, user_id, seat_role)
+         VALUES (?, ?, 'guest')",
+    )
+    .bind(&id)
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?;
+    matching::lobby_view(&state.pool, &id)
+        .await?
+        .map(Json)
+        .ok_or(AppError::NotFound)
+}
+
+pub async fn api_lobby_leave(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    AuthUser(user): AuthUser,
+) -> AppResult<StatusCode> {
+    matching::leave_lobby(&state.pool, &id, user.id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+pub struct VoteRequest {
+    pub vote: String,
+}
+
+pub async fn api_lobby_vote(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    AuthUser(user): AuthUser,
+    Json(req): Json<VoteRequest>,
+) -> AppResult<Json<matching::LobbyView>> {
+    matching::cast_vote(&state.pool, &id, user.id, &req.vote).await.map(Json)
+}
+
+// =====================================================================
+// W2b — Room: backlog + WebSocket + AI proxy
+// =====================================================================
+
+pub async fn api_room_backlog(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    AuthUser(_user): AuthUser,
+) -> AppResult<Json<Vec<RoomEvent>>> {
+    if !room::room_exists(&state.pool, &id).await? {
+        return Err(AppError::NotFound);
+    }
+    let events = room::backlog(&state.pool, &id).await?;
+    Ok(Json(events))
+}
+
+pub async fn api_room_ws(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    AuthUser(user): AuthUser,
+    ws: WebSocketUpgrade,
+) -> AppResult<Response> {
+    if !room::room_exists(&state.pool, &id).await? {
+        return Err(AppError::NotFound);
+    }
+    let bus = state.room_bus.clone();
+    let pool = state.pool.clone();
+    let user_id = user.id;
+    let user_name = user.username.clone();
+    let room_id = id;
+    Ok(ws.on_upgrade(move |socket| async move {
+        handle_room_socket(socket, pool, bus, room_id, user_id, user_name).await;
+    }))
+}
+
+async fn handle_room_socket(
+    socket: WebSocket,
+    pool: sqlx::SqlitePool,
+    bus: std::sync::Arc<RoomBus>,
+    room_id: String,
+    user_id: i64,
+    user_name: String,
+) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+
+    // 1) announce the join
+    let join_payload = serde_json::json!({
+        "user_id": user_id,
+        "username": user_name,
+    });
+    let _ = room::publish(
+        &pool, &bus, &room_id, Some(user_id), "system.peer_joined", &join_payload,
+    )
+    .await;
+
+    // 2) send the backlog
+    if let Ok(events) = room::backlog(&pool, &room_id).await {
+        for ev in events {
+            let payload = serde_json::to_string(&ev).unwrap_or_default();
+            if ws_tx.send(Message::Text(payload.into())).await.is_err() {
+                return;
+            }
+        }
+    }
+
+    // 3) subscribe to live events for this room
+    let mut rx = bus.channel(&room_id).await.subscribe();
+
+    // 4) write loop: forward bus events to the WebSocket
+    let bus_task = tokio::spawn(async move {
+        while let Ok(ev) = rx.recv().await {
+            let payload = serde_json::to_string(&ev).unwrap_or_default();
+            if ws_tx.send(Message::Text(payload.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // 5) read loop: accept chat events from the client
+    while let Some(msg) = ws_rx.next().await {
+        let Ok(msg) = msg else { break; };
+        match msg {
+            Message::Text(text) => {
+                let text = text.to_string();
+                if let Ok(req) = serde_json::from_str::<ClientRoomMessage>(&text) {
+                    match req.kind.as_str() {
+                        "chat" => {
+                            let text = req
+                                .payload
+                                .get("text")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if text.is_empty() {
+                                continue;
+                            }
+                            let payload = serde_json::json!({
+                                "user_id": user_id,
+                                "username": user_name,
+                                "text": text,
+                            });
+                            let _ = room::publish(
+                                &pool, &bus, &room_id, Some(user_id), "chat", &payload,
+                            )
+                            .await;
+                        }
+                        "canvas.put" => {
+                            // Persist as-is; the client is the source of
+                            // truth for canvas structure.
+                            let _ = room::publish(
+                                &pool, &bus, &room_id, Some(user_id), "canvas.put",
+                                &req.payload,
+                            )
+                            .await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+    bus_task.abort();
+
+    // 6) announce the leave
+    let leave_payload = serde_json::json!({ "user_id": user_id });
+    let _ = room::publish(
+        &pool, &bus, &room_id, Some(user_id), "system.peer_left", &leave_payload,
+    )
+    .await;
+}
+
+#[derive(Deserialize)]
+struct ClientRoomMessage {
+    kind: String,
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+pub async fn api_room_ai(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Extension(bus): Extension<Arc<RoomBus>>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<RoomEvent>> {
+    if !room::room_exists(&state.pool, &id).await? {
+        return Err(AppError::NotFound);
+    }
+    let cfg = AiConfig::from_env();
+    if !cfg.enabled() {
+        return Err(AppError::BadRequest(
+            "AI is not configured on the server (set OPENAI_API_KEY)".into(),
+        ));
+    }
+    let event = ai::ask_and_publish(
+        &state.pool, &bus, &state.http, &cfg, &user, &id,
+    )
+    .await?;
+    Ok(Json(event))
+}
+
+// =====================================================================
+// Test-only endpoints (gated on dev mode)
+// =====================================================================
+//
+// These are exposed so in-process tests can drive background tasks
+// deterministically. The main server enables them automatically; in
+// production with DEV_MODE=0 they would 403. We don't currently
+// deploy the binary in production, so we keep them simple.
+
+pub async fn test_run_sweep(
+    State(state): State<AppState>,
+) -> AppResult<Json<serde_json::Value>> {
+    if !state.config.dev_mode {
+        return Err(AppError::BadRequest("test endpoint disabled in non-dev".into()));
+    }
+    matching::run_sweep_for_test(&state.pool).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

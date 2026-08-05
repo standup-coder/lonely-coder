@@ -11,10 +11,10 @@ path = "src/main.rs"
 
 [dependencies]
 # Web framework — same choice as pair-terminal for muscle-memory consistency
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono", "macros"] }
@@ -49,6 +49,9 @@ async-trait = "0.1"
 
 # URL building for OAuth
 url = "2"
+
+# Stream / sink helpers for WebSocket handling
+futures-util = "0.3.32"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util", "macros"] }

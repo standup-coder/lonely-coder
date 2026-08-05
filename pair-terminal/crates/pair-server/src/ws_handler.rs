@@ -104,7 +104,6 @@ async fn handle_socket(socket: WebSocket, session_mgr: Arc<SessionManager>) {
                                 .unwrap_or_default();
                                 let _ = out_tx.send(ok_msg).await;
 
-                                let tid_clone = tid.clone();
                                 let _sm = session_mgr.clone();
                                 let host_out_tx = out_tx.clone();
 

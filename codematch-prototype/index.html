@@ -858,13 +858,18 @@
       /* ============================================================
          Backend API
          ============================================================ */
-      // Base URL for the real backend. Override at the top of the page via
+      // Base URL for the real backend. Default is empty (same origin)
+      // so the prototype can be served from the codematch-server itself
+      // and avoid CORS-with-credentials. Override via
       //   <meta name="api-base" content="http://your-host:port">
-      // for deployment. The default works against `codematch-server`
-      // running locally with `DEV_MODE=1`.
+      // for deployment on a different host.
       const API_BASE = (() => {
         const m = document.querySelector('meta[name="api-base"]');
-        return m ? m.getAttribute("content") : "http://127.0.0.1:18081";
+        if (m) return m.getAttribute("content");
+        // Same-origin default: codematch-server serves the prototype
+        // at /app/ alongside the API at /api/.
+        if (location.pathname.startsWith("/app")) return "";
+        return "http://127.0.0.1:18081";
       })();
 
       async function api(path, opts = {}) {
@@ -896,6 +901,19 @@
         me: () => api("/api/me"),
         updateMe: (body) => api("/api/me", { method: "PATCH", body: JSON.stringify(body) }),
         deck: () => api("/api/deck"),
+        // W2
+        joinQueue: (prefs) =>
+          api("/api/match/queue", { method: "POST", body: JSON.stringify(prefs || {}) }),
+        leaveQueue: () => api("/api/match/queue", { method: "DELETE" }),
+        matchStatus: () => api("/api/match/status"),
+        getLobby: (id) => api("/api/lobbies/" + id),
+        leaveLobby: (id) => api("/api/lobbies/" + id + "/leave", { method: "POST" }),
+        vote: (id, vote) =>
+          api("/api/lobbies/" + id + "/vote", { method: "POST", body: JSON.stringify({ vote }) }),
+        getRoomBacklog: (id) => api("/api/rooms/" + id + "/events"),
+        askAi: (id) => api("/api/rooms/" + id + "/ai", { method: "POST", body: "{}" }),
+        roomSocketUrl: (id) =>
+          API_BASE.replace(/^http/, "ws") + "/api/rooms/" + id + "/ws",
       };
 
       // Map a backend UserPublic to the shape the swipe card expects.
@@ -957,18 +975,25 @@
          Tiny state machine
          ============================================================ */
       const state = {
-        screen: "landing",     // landing | profile | swipe | match | room
+        screen: "landing",     // landing | profile | swipe | matching | lobby | room
         me: { name: "", skill: "Rust", topic: "", ai: "claude", skills: ["Rust", "K8s"], tz: "上海 · 21:40" },
         deck: DECK.slice(),
         swipes: 0,
         quota: 12,
-        decisions: {},          // id -> "yes" | "no"
-        matchedSquad: null,    // filled when SQUAD_SIZE mutually yes
+        decisions: {},          // id -> "yes" | "no" (swipe mode)
+        matchedSquad: null,    // swipe mode only
+        // W2 matching flow state
+        matchStatus: null,      // { in_queue, queue_size, waited_seconds, pending_lobby_id }
+        currentLobby: null,     // LobbyView
+        currentRoomId: null,    // string
+        roomSocket: null,       // WebSocket
+        roomMessages: [],
+        activeSeat: 0,
         sessionStart: null,
         timer: null,
         timerRemaining: SESSION_SECONDS,
-        roomMessages: [],
-        activeSeat: 0,         // who's "typing" indicator
+        // W2 dev seed avatars (a few extra for the matching demo)
+        squadSeed: [],
       };
 
       function $(sel, root = document) { return root.querySelector(sel); }
@@ -997,6 +1022,9 @@
         state.screen = name;
         render();
         if (name === "swipe") ensureDeck();
+        if (name === "matching") pollMatchStatus();
+        if (name === "lobby")   pollLobby();
+        if (name === "room")    enterRoomScreen();
       }
 
       function render() {
@@ -1005,7 +1033,8 @@
         if (state.screen === "landing") screen.append(viewLanding());
         else if (state.screen === "profile") screen.append(viewProfile());
         else if (state.screen === "swipe") screen.append(viewSwipe());
-        else if (state.screen === "match") screen.append(viewMatch());
+        else if (state.screen === "matching") screen.append(viewMatching());
+        else if (state.screen === "lobby") screen.append(viewLobby());
         else if (state.screen === "room") screen.append(viewRoom());
         root.append(screen);
       }
@@ -1056,7 +1085,9 @@
         try {
           const r = await Api.devLogin(handle);
           if (!r.ok) throw new Error("dev login: " + r.status);
-          // Re-fetch status and me, then drop into the deck.
+          // Re-fetch status and me, then drop into the matching queue.
+          // (W2 path: the prototype's headline experience is the
+          // queue → lobby → room flow, not the manual swipe deck.)
           const me = await Api.me();
           state.authMode = "dev";
           state.me.name = me.display_name || me.username;
@@ -1064,8 +1095,7 @@
           state.me.topic = me.topic || "";
           state.me.ai = me.primary_ai || "claude";
           state.me.tz = me.timezone || state.me.tz;
-          await loadDeck();
-          setScreen("swipe");
+          await enterMatchingFlow();
         } catch (e) {
           state.apiError = String(e.message || e);
           render();
@@ -1136,12 +1166,39 @@
             el("button", {
               class: "btn primary",
               style: { width: "100%", padding: "16px" },
-              onclick: () => saveProfileAndEnter(),
-            }, state.profileSaving ? "Saving…" : "Enter the deck →"),
+              onclick: () => saveProfileAndFindSquad(),
+            }, state.profileSaving ? "Saving…" : "Find a squad →"),
           ),
         );
       }
 
+      // W2 path: save profile, then enter the matching queue.
+      // Falls back to the offline swipe deck if the backend is down.
+      async function saveProfileAndFindSquad() {
+        if (!state.me.name.trim()) {
+          state.me.name = "You";
+        }
+        state.profileSaving = true;
+        state.profileError = null;
+        render();
+        try {
+          await Api.updateMe({
+            display_name: state.me.name,
+            skills: state.me.skills,
+            primary_ai: state.me.ai,
+            topic: state.me.topic,
+            timezone: state.me.tz,
+          });
+          await enterMatchingFlow();
+        } catch (e) {
+          state.profileError = String(e.message || e);
+          state.profileSaving = false;
+          render();
+        }
+      }
+
+      // Kept around as the swipe-deck path. The primary W2 entry is
+      // `saveProfileAndFindSquad` above.
       async function saveProfileAndEnter() {
         if (!state.me.name.trim()) {
           state.me.name = "You";
@@ -1326,7 +1383,7 @@
               ...Array.from(yesSet).slice(0, SQUAD_SIZE - 1).map(id => DECK.find(d => d.id === id)),
             ];
             state.matchedSquad = squad;
-            setScreen("match");
+            setScreen("matchLegacy");
             return;
           }
         }
@@ -1341,7 +1398,219 @@
       /* ============================================================
          Match
          ============================================================ */
-      function viewMatch() {
+      // =====================================================================
+      // W2 flow: real matching (POST /api/match/queue) → real lobby → real room
+      // =====================================================================
+
+      async function enterMatchingFlow() {
+        try {
+          await Api.joinQueue({
+            languages: state.me.skills.slice(0, 3),
+            topic: state.me.topic || undefined,
+            timezone: state.me.tz,
+          });
+          setScreen("matching");
+        } catch (e) {
+          state.apiError = String(e.message || e);
+          render();
+        }
+      }
+
+      async function pollMatchStatus() {
+        // Poll the queue. As soon as a lobby materialises for us, switch
+        // screens. We poll every 2s; the server's background sweep runs
+        // on the same cadence, so the typical wait is 0–2s once 4 users
+        // are queued.
+        if (state._matchPollTimer) clearInterval(state._matchPollTimer);
+        const tick = async () => {
+          if (state.screen !== "matching") return;
+          try {
+            const s = await Api.matchStatus();
+            state.matchStatus = s;
+            if (s.pending_lobby_id) {
+              clearInterval(state._matchPollTimer);
+              state._matchPollTimer = null;
+              await loadLobby(s.pending_lobby_id);
+            } else {
+              // re-render to update the counter
+              render();
+            }
+          } catch (e) {
+            // best-effort; keep polling
+            console.warn("match status poll failed:", e);
+          }
+        };
+        await tick();
+        state._matchPollTimer = setInterval(tick, 2000);
+      }
+
+      function viewMatching() {
+        const s = state.matchStatus || {};
+        const waited = s.waited_seconds || 0;
+        return el("div", { class: "screen" },
+          el("div", { class: "topbar" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("button", { class: "btn ghost", onclick: () => leaveMatching() }, "Leave queue"),
+          ),
+          el("div", { class: "hero" },
+            el("div", { class: "eyebrow" }, "W2 · real matching engine"),
+            el("h1", { html: "Looking for a <em>squad</em>." }),
+            el("p", { class: "lede" },
+              "You're in the queue. The server polls every 2 seconds; once ",
+              "4 of you are here it forms a lobby and we'll ask everyone to ",
+              "vote."
+            ),
+            el("div", { class: "preview" },
+              el("div", { class: "row" }, el("span", { class: "key" }, "in queue"), el("span", { class: "v" }, s.in_queue ? "yes" : "no")),
+              el("div", { class: "row" }, el("span", { class: "key" }, "queue size"), el("span", { class: "v" }, s.queue_size || 0)),
+              el("div", { class: "row" }, el("span", { class: "key" }, "waited"), el("span", { class: "v" }, waited + "s")),
+              el("div", { class: "row" }, el("span", { class: "key" }, "squad size"), el("span", { class: "v" }, "4 (you + 3)")),
+            ),
+            state.apiError ? el("div", { class: "preview", style: { borderColor: "var(--danger)" } },
+              el("div", { class: "row" },
+                el("span", { class: "key", style: { color: "var(--danger)" } }, "err"),
+                el("span", { class: "v" }, state.apiError),
+              ),
+            ) : null,
+          ),
+        );
+      }
+
+      async function leaveMatching() {
+        if (state._matchPollTimer) {
+          clearInterval(state._matchPollTimer);
+          state._matchPollTimer = null;
+        }
+        try { await Api.leaveQueue(); } catch (_) {}
+        setScreen("profile");
+      }
+
+      async function loadLobby(lobbyId) {
+        try {
+          const lobby = await Api.getLobby(lobbyId);
+          state.currentLobby = lobby;
+          if (lobby.status === "matched" && lobby.room_id) {
+            state.currentRoomId = lobby.room_id;
+            setScreen("room");
+          } else {
+            setScreen("lobby");
+          }
+        } catch (e) {
+          state.apiError = String(e.message || e);
+          render();
+        }
+      }
+
+      async function pollLobby() {
+        if (state._lobbyPollTimer) clearInterval(state._lobbyPollTimer);
+        const tick = async () => {
+          if (state.screen !== "lobby" || !state.currentLobby) return;
+          try {
+            const lobby = await Api.getLobby(state.currentLobby.id);
+            state.currentLobby = lobby;
+            // After every vote, the server may have transitioned the lobby.
+            if (lobby.status === "matched" && lobby.room_id) {
+              clearInterval(state._lobbyPollTimer);
+              state._lobbyPollTimer = null;
+              state.currentRoomId = lobby.room_id;
+              setScreen("room");
+              return;
+            }
+            if (lobby.status === "closed") {
+              clearInterval(state._lobbyPollTimer);
+              state._lobbyPollTimer = null;
+              state.currentLobby = null;
+              setScreen("matching");
+              return;
+            }
+            render();
+          } catch (e) {
+            console.warn("lobby poll failed:", e);
+          }
+        };
+        await tick();
+        state._lobbyPollTimer = setInterval(tick, 1500);
+      }
+
+      function viewLobby() {
+        const l = state.currentLobby;
+        if (!l) return el("div", { class: "empty" }, el("h3", {}, "Loading lobby…"));
+        const seats = l.seats || [];
+        const myVote = seats.find(s => s.username === state.me.name)?.vote || null;
+        const allVoted = seats.every(s => !!s.vote);
+        return el("div", { class: "screen" },
+          el("div", { class: "topbar" },
+            el("div", { class: "brand" }, el("span", { class: "dot" }), "CodeMatch"),
+            el("div", { class: "pill" }, "Lobby · " + l.id),
+          ),
+          el("div", { class: "hero" },
+            el("div", { class: "eyebrow" }, l.status === "negotiating" ? "Mutual-yes round" : l.status),
+            el("h1", { html: "Your <em>squad</em> is here." }),
+            el("p", { class: "lede" },
+              "Everyone votes accept to open the room. Anyone skipping closes the lobby ",
+              "and re-queues the survivors."
+            ),
+            el("div", { class: "squad" },
+              ...seats.map(s =>
+                el("div", { class: "seat" },
+                  el("div", { class: "av", style: { background: pickColor(s.username) } }, (s.display_name || s.username)[0]),
+                  el("div", {},
+                    el("div", { class: "who-name" }, s.display_name || s.username),
+                    el("div", { class: "who-ai" }, "Bringing " + (s.primary_ai || "?")),
+                  ),
+                  s.vote ? el("div", { class: "who-ai", style: { color: s.vote === "accept" ? "var(--good)" : "var(--danger)" } }, "voted " + s.vote) : null,
+                )
+              ),
+            ),
+            allVoted ? null : el("div", { class: "preview" },
+              el("div", { class: "row" }, el("span", { class: "key" }, "your vote"), el("span", { class: "v" }, myVote || "pending")),
+            ),
+            el("div", { class: "stack" },
+              el("button", {
+                class: "btn primary" + (myVote === "accept" ? " on" : ""),
+                onclick: () => castVote("accept"),
+                disabled: myVote === "accept",
+              }, "✓ Accept"),
+              el("button", {
+                class: "btn ghost" + (myVote === "skip" ? " on" : ""),
+                onclick: () => castVote("skip"),
+                disabled: myVote === "skip",
+              }, "✕ Skip"),
+              el("button", {
+                class: "btn ghost",
+                onclick: () => leaveLobby(),
+              }, "Leave lobby"),
+            ),
+          ),
+        );
+      }
+
+      async function castVote(vote) {
+        if (!state.currentLobby) return;
+        try {
+          const updated = await Api.vote(state.currentLobby.id, vote);
+          state.currentLobby = updated;
+          render();
+        } catch (e) {
+          state.apiError = String(e.message || e);
+          render();
+        }
+      }
+
+      async function leaveLobby() {
+        if (!state.currentLobby) return;
+        const id = state.currentLobby.id;
+        if (state._lobbyPollTimer) { clearInterval(state._lobbyPollTimer); state._lobbyPollTimer = null; }
+        try { await Api.leaveLobby(id); } catch (_) {}
+        state.currentLobby = null;
+        setScreen("matching");
+      }
+
+      // =====================================================================
+      // Legacy mock-match screen (used only by the offline swipe path).
+      // =====================================================================
+
+      function viewMatchLegacy() {
         const squad = state.matchedSquad;
         return el("div", { class: "match screen" },
           el("div", { class: "eyebrow" }, "Mutual yes · 4 / 4"),
@@ -1389,6 +1658,117 @@
         if (state.timer) clearInterval(state.timer);
         state.timer = setInterval(tickTimer, 1000);
         seedRoomConversation();
+      }
+
+      async function enterRoomScreen() {
+        if (!state.currentRoomId) return;
+        // 1) pull the backlog so we render the right state immediately
+        try {
+          const events = await Api.getRoomBacklog(state.currentRoomId);
+          state.roomMessages = events
+            .filter(e => e.kind === "chat" || e.kind === "ai.done")
+            .map(e => {
+              const p = e.payload || {};
+              if (e.kind === "ai.done") {
+                return {
+                  kind: "ai",
+                  ai: "💡 " + (p.ai_name || "AI"),
+                  avColor: "#83c5be",
+                  mark: "·",
+                  body: p.text || "",
+                };
+              }
+              return {
+                kind: "user",
+                who: p.username || ("user " + (e.user_id || "?")),
+                avColor: "#f4a261",
+                av: ((p.username || "?")[0] || "?").toUpperCase(),
+                body: p.text || "",
+              };
+            });
+        } catch (e) {
+          console.warn("backlog fetch failed", e);
+        }
+        render();
+        // 2) open the WebSocket and start receiving live events
+        openRoomSocket();
+      }
+
+      function openRoomSocket() {
+        if (state.roomSocket) {
+          try { state.roomSocket.close(); } catch (_) {}
+        }
+        const url = Api.roomSocketUrl(state.currentRoomId);
+        let ws;
+        try { ws = new WebSocket(url); }
+        catch (e) { state.apiError = "websocket init: " + e.message; render(); return; }
+        state.roomSocket = ws;
+        ws.onmessage = (ev) => {
+          try {
+            const event = JSON.parse(ev.data);
+            handleRoomEvent(event);
+          } catch (e) {
+            console.warn("ws parse", e);
+          }
+        };
+        ws.onerror = (e) => {
+          state.apiError = "WebSocket error";
+          render();
+        };
+        ws.onclose = () => { state.roomSocket = null; };
+      }
+
+      function handleRoomEvent(event) {
+        const k = event.kind;
+        if (k === "chat") {
+          const p = event.payload || {};
+          state.roomMessages.push({
+            kind: "user",
+            who: p.username || ("user " + (event.user_id || "?")),
+            avColor: "#f4a261",
+            av: ((p.username || "?")[0] || "?").toUpperCase(),
+            body: p.text || "",
+          });
+          render();
+          scrollChatToBottom();
+        } else if (k === "ai.thinking") {
+          state.roomMessages.push({
+            kind: "ai",
+            ai: "💡 " + ((event.payload || {}).ai_name || "AI"),
+            avColor: "#83c5be",
+            mark: "·",
+            body: "thinking…",
+          });
+          render();
+          scrollChatToBottom();
+        } else if (k === "ai.done") {
+          const p = event.payload || {};
+          // Replace the last "thinking…" entry from the same AI, or append.
+          const idx = [...state.roomMessages].reverse().findIndex(
+            m => m.kind === "ai" && m.body === "thinking…" && m.ai.endsWith((p.ai_name || "AI"))
+          );
+          const entry = {
+            kind: "ai",
+            ai: "💡 " + (p.ai_name || "AI"),
+            avColor: "#83c5be",
+            mark: "·",
+            body: p.text || "",
+          };
+          if (idx >= 0) {
+            state.roomMessages[state.roomMessages.length - 1 - idx] = entry;
+          } else {
+            state.roomMessages.push(entry);
+          }
+          render();
+          scrollChatToBottom();
+        }
+        // system.peer_joined/left, canvas.put are visible only in the
+        // larger W3 UI; ignored here.
+      }
+
+      function scrollChatToBottom() {
+        const el = document.getElementById("chat-body");
+        if (el) el.scrollTop = el.scrollHeight;
       }
 
       function tickTimer() {
@@ -1504,6 +1884,12 @@
               onkeydown: (e) => { if (e.key === "Enter") sendMessage(); },
             }),
             el("button", { class: "send", onclick: () => sendMessage() }, "Send"),
+            el("button", {
+              id: "ai-ask",
+              class: "send",
+              style: { background: "var(--info)", color: "var(--bg)", marginLeft: "6px" },
+              onclick: () => askAiInRoom(),
+            }, "Ask my AI"),
           ),
         );
       }
@@ -1511,28 +1897,68 @@
       function sendMessage() {
         const input = $("#composer-input");
         if (!input || !input.value.trim()) return;
+        const text = input.value.trim();
+        input.value = "";
+
+        // If the WebSocket is open, push the message over it. The server
+        // appends to the room_events log and fans it out to every
+        // connected peer — including ourselves, so we get our own copy
+        // back through the same `chat` event and don't add it locally.
+        if (state.roomSocket && state.roomSocket.readyState === 1) {
+          state.roomSocket.send(JSON.stringify({
+            kind: "chat",
+            payload: { text },
+          }));
+          return;
+        }
+
+        // Offline / pre-WS fallback: just append locally so the demo
+        // still feels alive when the backend is down.
         const me = state.me.name || "You";
         const av = (me[0] || "Y").toUpperCase();
         state.roomMessages.push({
           kind: "user", who: me, avColor: "#f4a261", av,
-          body: input.value.trim(),
+          body: text,
         });
-        input.value = "";
-        // re-render messages only (avoid losing focus)
+        rerenderChatBody();
+      }
+
+      function rerenderChatBody() {
         const body = $("#chat-body");
-        if (body) {
-          body.innerHTML = "";
-          state.roomMessages.forEach(m => {
-            const div = el("div", { class: "msg" + (m.kind === "ai" ? " ai" : "") },
-              el("div", { class: "who" },
-                el("span", { class: "av-mini", style: { background: m.avColor || "#888" } }, m.av || m.mark),
-                m.kind === "ai" ? `💡 ${m.ai}` : m.who,
-              ),
-              el("div", { class: "body" }, m.body),
-            );
-            body.append(div);
+        if (!body) return;
+        body.innerHTML = "";
+        state.roomMessages.forEach(m => {
+          const div = el("div", { class: "msg" + (m.kind === "ai" ? " ai" : "") },
+            el("div", { class: "who" },
+              el("span", { class: "av-mini", style: { background: m.avColor || "#888" } }, m.av || m.mark),
+              m.kind === "ai" ? `💡 ${m.ai}` : m.who,
+            ),
+            el("div", { class: "body" }, m.body),
+          );
+          body.append(div);
+        });
+        body.scrollTop = body.scrollHeight;
+      }
+
+      async function askAiInRoom() {
+        if (!state.currentRoomId) return;
+        const btn = document.getElementById("ai-ask");
+        if (btn) { btn.disabled = true; btn.textContent = "Asking…"; }
+        try {
+          await Api.askAi(state.currentRoomId);
+        } catch (e) {
+          // Surface as a chat line so the user can see why it failed
+          // (most common: server has no OPENAI_API_KEY).
+          state.roomMessages.push({
+            kind: "ai",
+            ai: "💡 system",
+            avColor: "#e76f51",
+            mark: "!",
+            body: "AI: " + String(e.message || e),
           });
-          body.scrollTop = body.scrollHeight;
+          rerenderChatBody();
+        } finally {
+          if (btn) { btn.disabled = false; btn.textContent = "Ask my AI"; }
         }
       }
 

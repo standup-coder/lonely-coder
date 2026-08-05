@@ -1,12 +1,15 @@
 //! Library crate root. Exposes modules + a `build_router` so tests can
 //! drive the app in-process without going through `main`.
 
+pub mod ai;
 pub mod auth;
 pub mod config;
 pub mod db;
 pub mod error;
 pub mod handlers;
+pub mod matching;
 pub mod models;
+pub mod room;
 pub mod seed;
 
 use axum::{
@@ -16,18 +19,22 @@ use axum::{
     Router,
 };
 use sqlx::SqlitePool;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 pub use auth::AppState;
 pub use config::Config;
+pub use room::RoomBus;
 
 /// Build the axum router with the standard middleware stack. Used by
 /// `main` and by tests; if you want a stripped-down router (e.g. without
 /// CORS), call `Router::new()` yourself and add only the routes you need.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let bus = state.room_bus.clone();
+    let mut app = Router::new()
         .route("/health", get(handlers::health))
         .route("/auth/status", get(handlers::auth_status))
         .route("/auth/github", get(handlers::auth_github_start))
@@ -40,15 +47,54 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/me", get(handlers::api_me))
         .route("/api/me", patch(handlers::api_me_update))
         .route("/api/deck", get(handlers::api_deck))
+        // W2: matching + lobby + room
+        .route("/api/match/queue", post(handlers::api_match_queue))
+        .route("/api/match/queue", axum::routing::delete(handlers::api_match_dequeue))
+        .route("/api/match/status", get(handlers::api_match_status))
+        .route("/api/lobbies/:id", get(handlers::api_lobby_get))
+        .route("/api/lobbies/:id/join", post(handlers::api_lobby_join))
+        .route("/api/lobbies/:id/leave", post(handlers::api_lobby_leave))
+        .route("/api/lobbies/:id/vote", post(handlers::api_lobby_vote))
+        .route("/api/rooms/:id/events", get(handlers::api_room_backlog))
+        .route("/api/rooms/:id/ws", get(handlers::api_room_ws))
+        .route("/api/rooms/:id/ai", post(handlers::api_room_ai))
+        // Test-only: drive the matching sweep deterministically.
+        .route("/api/_test/sweep", post(handlers::test_run_sweep))
         .with_state(state)
+        .layer(axum::Extension(bus))
         .layer(TraceLayer::new_for_http())
         .layer(
             CorsLayer::new()
-                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PATCH,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
+                // `allow_credentials(false)` is required for `*` per the
+                // CORS spec. We rely on the prototype being served from
+                // the same origin (no CORS) for the credentials path;
+                // this CORS layer is just for the WebSocket upgrade
+                // handshake and dev-mode cross-origin testing.
                 .allow_origin(Any)
                 .allow_credentials(false)
                 .allow_headers(Any),
-        )
+        );
+
+    // Serve the prototype at `/app/*` from the repo's
+    // `codematch-prototype/` directory. This avoids the entire CORS
+    // credential problem: same origin → no CORS → cookies flow freely.
+    if let Ok(prototype_root) = std::env::var("PROTOTYPE_DIR") {
+        let p = PathBuf::from(prototype_root);
+        if p.exists() {
+            let index = p.join("index.html");
+            let serve = ServeDir::new(&p).fallback(ServeFile::new(&index));
+            app = app.fallback_service(serve);
+            tracing::info!(path = %p.display(), "serving prototype at /app/");
+        }
+    }
+    app
 }
 
 /// Apply the CORS layer to a router. Kept separate so tests can build a

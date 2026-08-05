@@ -255,4 +255,8 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Arc<crate::config::Config>,
     pub http: reqwest::Client,
+    /// In-process broadcast bus for room events. Shared across handlers
+    /// so the WebSocket fan-out and the AI publish path use the same
+    /// channels.
+    pub room_bus: Arc<crate::room::RoomBus>,
 }

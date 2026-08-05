@@ -10,7 +10,8 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use codematch_server::{
-    auth::AppState, build_router, db, dev_config_for_testing, dev_config_without_github, seed,
+    auth::AppState, build_router, db, dev_config_for_testing, dev_config_without_github, matching,
+    seed,
 };
 use serde_json::Value;
 use std::sync::Arc;
@@ -23,6 +24,22 @@ const MAX_BODY: usize = 64 * 1024;
 /// destroys the in-memory DB.
 async fn make_app() -> axum::Router {
     make_app_with_config(dev_config_for_testing()).await
+}
+
+/// Hit `/api/_test/sweep` to run the matching engine once. Tests use
+/// this instead of waiting for the background tick — deterministic and
+/// fast. The endpoint is gated on dev mode (which the test config
+/// has), so the call returns 200 in tests and would 400 in production.
+async fn drive_sweep(app: &axum::Router) {
+    let (_s, _b, _) = call(
+        app.clone(),
+        Request::builder()
+            .method("POST")
+            .uri("/api/_test/sweep")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
 }
 
 /// Build an app with a specific config. Used by tests that need a
@@ -38,6 +55,7 @@ async fn make_app_with_config(
         pool,
         config,
         http: reqwest::Client::new(),
+        room_bus: codematch_server::RoomBus::new(),
     };
     build_router(state)
 }
@@ -525,3 +543,330 @@ async fn api_me_update_topic_over_140_chars_rejected() {
 // downstream test additions may want to share the AppState across calls.
 #[allow(dead_code)]
 fn _unused(_: Arc<()>) {}
+
+// =====================================================================
+// W2a — Match queue + lobby
+// =====================================================================
+
+#[tokio::test]
+async fn match_queue_join_and_status() {
+    let app = make_app().await;
+    let (_s, _b, set_cookie) = call(
+        app.clone(),
+        Request::builder()
+            .method("GET")
+            .uri("/auth/dev-login?as=you")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let token = session_cookie(set_cookie.as_deref()).expect("cookie");
+
+    // Before queue: not in queue
+    let (status, body, _) = call(
+        app.clone(),
+        json_request("GET", "/api/match/status", None, Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["in_queue"], false);
+
+    // Join the queue
+    let prefs = serde_json::json!({ "languages": ["rust"], "topic": "test" });
+    let (status, body, _) = call(
+        app.clone(),
+        json_request("POST", "/api/match/queue", Some(&prefs.to_string()), Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["in_queue"], true);
+    assert!(body["queue_size"].as_u64().unwrap() >= 1);
+
+    // Leave the queue
+    let (status, _b, _) = call(
+        app.clone(),
+        json_request("DELETE", "/api/match/queue", None, Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn match_queue_forms_lobby_when_full() {
+    // Need 4 users in the queue. The dev seed provides users at ids
+    // 1_000_000..1_000_005. Plus we add one more via dev-login.
+    let app = make_app().await;
+    let mut tokens: Vec<String> = Vec::new();
+
+    // Log in as 4 distinct seed users (maya, raj, lin, sam).
+    for handle in &["maya", "raj", "lin", "sam"] {
+        let (status, _b, set_cookie) = call(
+            app.clone(),
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/auth/dev-login?as={handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        tokens.push(session_cookie(set_cookie.as_deref()).expect("cookie"));
+    }
+
+    // Each user joins the queue
+    for tok in &tokens {
+        let prefs = serde_json::json!({ "languages": ["rust"] });
+        let (status, _b, _) = call(
+            app.clone(),
+            json_request("POST", "/api/match/queue", Some(&prefs.to_string()), Some(tok)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // Drive the matching engine synchronously (instead of waiting for
+    // the 2s background tick). The sweep returns once a lobby is formed
+    // or there's nothing to do.
+    drive_sweep(&app).await;
+
+    // Find the lobby id from any of the queued users.
+    let (status, body, _) = call(
+        app.clone(),
+        json_request("GET", "/api/match/status", None, Some(&tokens[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let lobby_id = body["pending_lobby_id"]
+        .as_str()
+        .expect("lobby was not created by the sweep")
+        .to_string();
+
+    // Get the lobby view
+    let (status, body, _) = call(
+        app.clone(),
+        json_request("GET", &format!("/api/lobbies/{lobby_id}"), None, Some(&tokens[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "negotiating");
+    let seats = body["seats"].as_array().expect("seats array");
+    assert_eq!(seats.len(), 4);
+}
+
+#[tokio::test]
+async fn lobby_vote_all_accept_creates_room() {
+    // Set up 4 users, fill the queue, wait for the lobby, then have
+    // everyone vote accept. The matching engine should mark the lobby
+    // as "matched" and create a room.
+    let app = make_app().await;
+    let mut tokens: Vec<String> = Vec::new();
+    for handle in &["maya", "raj", "lin", "sam"] {
+        let (status, _b, set_cookie) = call(
+            app.clone(),
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/auth/dev-login?as={handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+        tokens.push(session_cookie(set_cookie.as_deref()).expect("cookie"));
+    }
+    for tok in &tokens {
+        let prefs = serde_json::json!({ "languages": ["rust"] });
+        let (status, _b, _) = call(
+            app.clone(),
+            json_request("POST", "/api/match/queue", Some(&prefs.to_string()), Some(tok)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    drive_sweep(&app).await;
+
+    // Find the lobby id
+    let (_s, body, _) = call(
+        app.clone(),
+        json_request("GET", "/api/match/status", None, Some(&tokens[0])),
+    )
+    .await;
+    let lobby_id = body["pending_lobby_id"]
+        .as_str()
+        .expect("lobby was not created")
+        .to_string();
+
+    // All 4 accept
+    for tok in &tokens {
+        let body = serde_json::json!({ "vote": "accept" });
+        let (status, _b, _) = call(
+            app.clone(),
+            json_request("POST", &format!("/api/lobbies/{lobby_id}/vote"), Some(&body.to_string()), Some(tok)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    // The lobby should now be matched with a room_id
+    let (status, body, _) = call(
+        app,
+        json_request("GET", &format!("/api/lobbies/{lobby_id}"), None, Some(&tokens[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["status"], "matched");
+    assert!(body["room_id"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn lobby_vote_skip_closes_lobby() {
+    // Same setup, but one user skips. The lobby should close.
+    let app = make_app().await;
+    let mut tokens: Vec<String> = Vec::new();
+    for handle in &["maya", "raj", "lin", "sam"] {
+        let (_s, _b, set_cookie) = call(
+            app.clone(),
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/auth/dev-login?as={handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        tokens.push(session_cookie(set_cookie.as_deref()).expect("cookie"));
+    }
+    for tok in &tokens {
+        let prefs = serde_json::json!({});
+        call(
+            app.clone(),
+            json_request("POST", "/api/match/queue", Some(&prefs.to_string()), Some(tok)),
+        )
+        .await;
+    }
+    drive_sweep(&app).await;
+
+    let (_s, body, _) = call(
+        app.clone(),
+        json_request("GET", "/api/match/status", None, Some(&tokens[0])),
+    )
+    .await;
+    let lobby_id = body["pending_lobby_id"]
+        .as_str()
+        .expect("lobby not created")
+        .to_string();
+
+    // First user skips
+    let body = serde_json::json!({ "vote": "skip" });
+    let (status, _b, _) = call(
+        app.clone(),
+        json_request("POST", &format!("/api/lobbies/{lobby_id}/vote"), Some(&body.to_string()), Some(&tokens[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // After the skip, the lobby is closed. The seats that didn't skip
+    // should be requeued.
+    let (_s, body, _) = call(
+        app,
+        json_request("GET", &format!("/api/lobbies/{lobby_id}"), None, Some(&tokens[1])),
+    )
+    .await;
+    assert_eq!(body["status"], "closed");
+}
+
+// =====================================================================
+// W2b — Room backlog
+// =====================================================================
+
+#[tokio::test]
+async fn room_backlog_returns_404_for_unknown_room() {
+    let app = make_app().await;
+    let (_s, _b, set_cookie) = call(
+        app.clone(),
+        Request::builder()
+            .method("GET")
+            .uri("/auth/dev-login?as=you")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let token = session_cookie(set_cookie.as_deref()).expect("cookie");
+
+    let (status, _b, _) = call(
+        app,
+        json_request("GET", "/api/rooms/no-such-room/events", None, Some(&token)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+// =====================================================================
+// W2d — AI proxy rejects when key is missing
+// =====================================================================
+
+#[tokio::test]
+async fn room_ai_returns_400_when_no_api_key() {
+    // Build a tiny flow: form a lobby, all-accept, get a room, hit
+    // /api/rooms/:id/ai. We don't actually have an OPENAI_API_KEY in
+    // the test env, so the proxy should reject with a clean error.
+    let app = make_app().await;
+    let mut tokens: Vec<String> = Vec::new();
+    for handle in &["maya", "raj", "lin", "sam"] {
+        let (_s, _b, set_cookie) = call(
+            app.clone(),
+            Request::builder()
+                .method("GET")
+                .uri(&format!("/auth/dev-login?as={handle}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        tokens.push(session_cookie(set_cookie.as_deref()).expect("cookie"));
+    }
+    for tok in &tokens {
+        let prefs = serde_json::json!({});
+        call(
+            app.clone(),
+            json_request("POST", "/api/match/queue", Some(&prefs.to_string()), Some(tok)),
+        )
+        .await;
+    }
+    drive_sweep(&app).await;
+
+    let (_s, body, _) = call(
+        app.clone(),
+        json_request("GET", "/api/match/status", None, Some(&tokens[0])),
+    )
+    .await;
+    let lobby_id = body["pending_lobby_id"]
+        .as_str()
+        .expect("lobby not created")
+        .to_string();
+
+    for tok in &tokens {
+        let body = serde_json::json!({ "vote": "accept" });
+        call(
+            app.clone(),
+            json_request("POST", &format!("/api/lobbies/{lobby_id}/vote"), Some(&body.to_string()), Some(tok)),
+        )
+        .await;
+    }
+
+    let (status, body, _) = call(
+        app.clone(),
+        json_request("GET", &format!("/api/lobbies/{lobby_id}"), None, Some(&tokens[0])),
+    )
+    .await;
+    let room_id = body["room_id"].as_str().expect("room id").to_string();
+
+    // Hit the AI endpoint
+    let (status, body, _) = call(
+        app,
+        json_request("POST", &format!("/api/rooms/{room_id}/ai"), Some("{}"), Some(&tokens[0])),
+    )
+    .await;
+    // Without OPENAI_API_KEY, the proxy should 400 with a clear message.
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let err = body["error"].as_str().unwrap();
+    assert!(err.contains("AI") || err.contains("OPENAI_API_KEY"), "got: {err}");
+}

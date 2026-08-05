@@ -13,6 +13,9 @@ reference only.
 | Path | What it is | Status |
 |------|------------|--------|
 | [`pair-terminal/`](./pair-terminal/) | Rust workspace for terminal pair programming (the live project) | **Active** |
+| [`codematch-server/`](./codematch-server/) | Rust backend for CodeMatch — 4-person brainstorm matching (W2 in progress) | **Active** |
+| [`codematch-prototype/`](./codematch-prototype/) | Single-page prototype for CodeMatch (vanilla HTML, dark editorial theme) | **Active** |
+| [`product-design/`](./product-design/) | Design notes for the CodeMatch product | Reference |
 | [`archive/`](./archive/) | Old PHP frameworks from the Wuma/无码 era (LaneWeChat, WeiEngine, WeiPHP) | Frozen — historical |
 | [`analysis-report.md`](./analysis-report.md) | Security & quality autopsy of the archived PHP code (2026-04) | Frozen — historical |
 | [`ideas.md`](./ideas.md) | Long-form brainstorm notes | Reference only |
